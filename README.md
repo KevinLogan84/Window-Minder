@@ -36,7 +36,7 @@ System Settings > Privacy & Security > Accessibility
 
 Enable Window Minder there. Nothing is stored or restored until that permission is on.
 
-The menu re-checks `AXIsProcessTrusted` about once a second until access is granted, and also when the menu opens, when the app becomes active, and when macOS posts `com.apple.accessibility.api`. Store and Restore turn on as soon as that check succeeds. Polling stops once access is granted.
+`AXIsProcessTrusted` can stay cached for the life of the process, so a grant is also checked with a live Accessibility call (`AXUIElementCopyAttributeValue` on the system-wide element). API disabled means not granted. Any other result, or a cached `true` from `AXIsProcessTrusted`, counts as granted. The menu rechecks about once a second until then, including while the menu is open, and also when the menu opens, when the app becomes active, when another app becomes frontmost, and when macOS posts `com.apple.accessibility.api` (immediately, then again after half a second and two seconds). Each check is logged to Console under subsystem `com.kevinlogan.WindowMinder` and category `accessibility`. Store and Restore turn on as soon as a check succeeds, without relaunching. Polling stops once access is granted.
 
 ## Build and test
 

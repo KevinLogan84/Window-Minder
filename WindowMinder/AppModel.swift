@@ -1,6 +1,9 @@
 import AppKit
 import Foundation
 import Observation
+import os
+
+private let accessibilityLogger = Logger(subsystem: WindowMinderIdentity.bundleIdentifier, category: "accessibility")
 
 @MainActor
 @Observable
@@ -14,11 +17,14 @@ final class AppModel {
     private var didStart = false
     private var externalFrontmostBundleID: String?
     private var frontmostObserver: NSObjectProtocol?
-    private var trustObservers: [NSObjectProtocol] = []
+    private var activationObserver: NSObjectProtocol?
     private var trustPollTimer: Timer?
+    private var notificationRecheckGeneration = 0
+    private var lastActivationCheckUptime: TimeInterval = -1
     private let accessibilityChanges = AccessibilityChangeObserver()
     private static let deniedStatusMessage = "Accessibility access is not granted."
     private static weak var trustRefreshTarget: AppModel?
+    var onAccessibilityTrustChange: (@MainActor () -> Void)?
     private var windowOperation: Task<Void, Never>?
     private var menuBarGeneration = 0
 
@@ -107,17 +113,17 @@ final class AppModel {
             self?.restoreNow()
         }
         registerHotkeys()
-        observeFrontmostApp()
         observeAccessibilityTrust()
-        accessibilityTrusted = accessibility.promptForTrust()
-        updateTrustPolling()
+        _ = accessibility.promptForTrust()
+        refreshAccessibilityTrust(source: .launch)
+        observeFrontmostApp()
         coordinator.start()
         reloadLayouts()
         loginState = loginItems.state()
     }
 
     private func observeFrontmostApp() {
-        noteExternalFrontmost(NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        noteExternalFrontmost(NSWorkspace.shared.frontmostApplication?.bundleIdentifier, recheckTrust: false)
         frontmostObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -125,19 +131,22 @@ final class AppModel {
         ) { [weak self] notification in
             let bundleID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
             MainActor.assumeIsolated {
-                self?.noteExternalFrontmost(bundleID)
+                self?.noteExternalFrontmost(bundleID, recheckTrust: true)
             }
         }
     }
 
-    private func noteExternalFrontmost(_ bundleID: String?) {
+    private func noteExternalFrontmost(_ bundleID: String?, recheckTrust: Bool) {
         guard let bundleID, !bundleID.isEmpty, !isOwnBundle(bundleID) else { return }
         externalFrontmostBundleID = bundleID
         coordinator?.noteUserActivity()
+        if recheckTrust, !accessibilityTrusted {
+            refreshAccessibilityTrust(source: .frontmost)
+        }
     }
 
     func refreshForMenu() {
-        refreshAccessibilityTrust()
+        refreshAccessibilityTrust(source: .menuOpen)
         let state = loginItems.state()
         if loginState != state {
             loginState = state
@@ -145,16 +154,27 @@ final class AppModel {
         reloadLayouts()
     }
 
-    /// Re-reads `AXIsProcessTrusted` on the main actor and starts or stops the one-second poll.
-    func refreshAccessibilityTrust() {
-        let trusted = accessibility.isTrusted
-        if accessibilityTrusted != trusted {
+    /// Live Accessibility probe plus the cached process flag. Starts or stops the one-second poll.
+    func refreshAccessibilityTrust(source: AccessibilityTrustCheckSource) {
+        if source == .activation {
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - lastActivationCheckUptime < 0.3 {
+                return
+            }
+            lastActivationCheckUptime = now
+        }
+        let trusted = accessibility.currentTrust(source: source)
+        let changed = accessibilityTrusted != trusted
+        if changed {
             accessibilityTrusted = trusted
         }
         if trusted, statusMessage == Self.deniedStatusMessage {
             statusMessage = nil
         }
         updateTrustPolling()
+        if changed {
+            onAccessibilityTrustChange?()
+        }
     }
 
     var isWindowOperationRunning: Bool {
@@ -333,7 +353,7 @@ final class AppModel {
     }
 
     private func trustOrExplain() -> Bool {
-        refreshAccessibilityTrust()
+        refreshAccessibilityTrust(source: .action)
         guard accessibilityTrusted else {
             statusMessage = Self.deniedStatusMessage
             return false
@@ -344,58 +364,92 @@ final class AppModel {
     private func observeAccessibilityTrust() {
         Self.trustRefreshTarget = self
         accessibilityChanges.onChange = { [weak self] in
-            self?.refreshAccessibilityTrust()
+            self?.recheckTrustAfterAccessibilityNotification()
         }
         accessibilityChanges.start()
 
-        trustObservers.append(
-            NotificationCenter.default.addObserver(
-                forName: NSApplication.didBecomeActiveNotification,
-                object: nil,
-                queue: .main
-            ) { _ in
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                AppModel.trustRefreshTarget?.refreshAccessibilityTrust(source: .activation)
+            }
+        }
+    }
+
+    /// The distributed notification can arrive on any thread and before the grant
+    /// is visible to Accessibility. Recheck now, then again after the follow-up delays.
+    private func recheckTrustAfterAccessibilityNotification() {
+        refreshAccessibilityTrust(source: .notification)
+        notificationRecheckGeneration += 1
+        let generation = notificationRecheckGeneration
+        for delay in AccessibilityTrustPolling.notificationFollowUpDelays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 MainActor.assumeIsolated {
-                    AppModel.trustRefreshTarget?.refreshAccessibilityTrust()
+                    guard let self, generation == self.notificationRecheckGeneration else { return }
+                    self.refreshAccessibilityTrust(source: .notification)
                 }
             }
-        )
-        trustObservers.append(
-            NotificationCenter.default.addObserver(
-                forName: NSMenu.didBeginTrackingNotification,
-                object: nil,
-                queue: .main
-            ) { _ in
-                MainActor.assumeIsolated {
-                    AppModel.trustRefreshTarget?.refreshAccessibilityTrust()
-                }
-            }
-        )
+        }
     }
 
     private func updateTrustPolling() {
-        if AccessibilityTrustPolling.shouldPoll(isTrusted: accessibilityTrusted) {
-            startTrustPollingIfNeeded()
-        } else {
+        if AccessibilityTrustPolling.shouldStopPolling(isTrusted: accessibilityTrusted) {
             stopTrustPolling()
+        } else if AccessibilityTrustPolling.shouldStartPolling(
+            isTrusted: accessibilityTrusted,
+            timerAlreadyRunning: trustPollTimer != nil
+        ) {
+            startTrustPollingIfNeeded()
         }
     }
 
     private func startTrustPollingIfNeeded() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.startTrustPollingIfNeeded()
+                }
+            }
+            return
+        }
         guard trustPollTimer == nil else { return }
         let timer = Timer(timeInterval: AccessibilityTrustPolling.interval, repeats: true) { _ in
-            // The timer is on the main run loop, including menu tracking.
-            MainActor.assumeIsolated {
-                AppModel.trustRefreshTarget?.refreshAccessibilityTrust()
+            if Thread.isMainThread {
+                MainActor.assumeIsolated {
+                    AppModel.handleTrustPoll()
+                }
+            } else {
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        AppModel.handleTrustPoll()
+                    }
+                }
             }
         }
         timer.tolerance = 0.2
+        // `.common` includes event tracking, so the poll keeps firing while the
+        // menu is open. `.eventTracking` is added on its own in case this run
+        // loop's common set does not.
         RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: .eventTracking)
         trustPollTimer = timer
+        accessibilityLogger.info(
+            "Trust poll scheduled on the main run loop modes=common+eventTracking interval=\(AccessibilityTrustPolling.interval, privacy: .public)"
+        )
+    }
+
+    private static func handleTrustPoll() {
+        trustRefreshTarget?.refreshAccessibilityTrust(source: .poll)
     }
 
     private func stopTrustPolling() {
+        guard trustPollTimer != nil else { return }
         trustPollTimer?.invalidate()
         trustPollTimer = nil
+        accessibilityLogger.info("Trust poll stopped")
     }
 
     private func reloadLayouts() {
@@ -510,6 +564,10 @@ final class AccessibilityChangeObserver: NSObject {
     }
 
     @objc nonisolated func handleAccessibilityAPINotification(_ notification: Notification) {
+        let onMain = Thread.isMainThread
+        accessibilityLogger.info(
+            "Accessibility notification received onMain=\(onMain, privacy: .public); rechecking now, after 0.5s, and after 2s"
+        )
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 AccessibilityChangeObserver.current?.onChange?()

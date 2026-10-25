@@ -14,7 +14,7 @@
 		B9A61E12D42AE70A717AA97D /* HotkeyFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72AAE90E1BE261B9E0719DDA /* HotkeyFormatting.swift */; };
 		270FFF3A65E353C1CD2DC331 /* LayoutCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F18F19943F5D4274E2AA7A82 /* LayoutCoordinator.swift */; };
 		DEF637DD8762ADA7F99D6474 /* LoginItemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB1D9A64D56C188585C7F796 /* LoginItemController.swift */; };
-		CDBCBCB8F8EEE5B5CB8B040F /* MenuContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91E40FAD7756C93B4C6E557D /* MenuContentView.swift */; };
+		CDBCBCB8F8EEE5B5CB8B040F /* StatusMenuController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91E40FAD7756C93B4C6E557D /* StatusMenuController.swift */; };
 		A029FA2C7A955768257E12F1 /* PreferencesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9616A6D9CC865CBB48671F4 /* PreferencesView.swift */; };
 		DCB3B76810F7AB489F315FEE /* ShortcutRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A033AF887CA4B707B64B672 /* ShortcutRecorder.swift */; };
 		AFDC5AF201CA1552FCED17EE /* WindowMinderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71CAB0330F409327E3123B3D /* WindowMinderApp.swift */; };
@@ -56,7 +56,7 @@
 		72AAE90E1BE261B9E0719DDA /* HotkeyFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyFormatting.swift; sourceTree = "<group>"; };
 		F18F19943F5D4274E2AA7A82 /* LayoutCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutCoordinator.swift; sourceTree = "<group>"; };
 		DB1D9A64D56C188585C7F796 /* LoginItemController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemController.swift; sourceTree = "<group>"; };
-		91E40FAD7756C93B4C6E557D /* MenuContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuContentView.swift; sourceTree = "<group>"; };
+		91E40FAD7756C93B4C6E557D /* StatusMenuController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusMenuController.swift; sourceTree = "<group>"; };
 		C9616A6D9CC865CBB48671F4 /* PreferencesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesView.swift; sourceTree = "<group>"; };
 		9A033AF887CA4B707B64B672 /* ShortcutRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRecorder.swift; sourceTree = "<group>"; };
 		71CAB0330F409327E3123B3D /* WindowMinderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowMinderApp.swift; sourceTree = "<group>"; };
@@ -111,7 +111,7 @@
 				72AAE90E1BE261B9E0719DDA /* HotkeyFormatting.swift */,
 				F18F19943F5D4274E2AA7A82 /* LayoutCoordinator.swift */,
 				DB1D9A64D56C188585C7F796 /* LoginItemController.swift */,
-				91E40FAD7756C93B4C6E557D /* MenuContentView.swift */,
+				91E40FAD7756C93B4C6E557D /* StatusMenuController.swift */,
 				C9616A6D9CC865CBB48671F4 /* PreferencesView.swift */,
 				9A033AF887CA4B707B64B672 /* ShortcutRecorder.swift */,
 				71CAB0330F409327E3123B3D /* WindowMinderApp.swift */,
@@ -218,7 +218,7 @@
 				B9A61E12D42AE70A717AA97D /* HotkeyFormatting.swift in Sources */,
 				270FFF3A65E353C1CD2DC331 /* LayoutCoordinator.swift in Sources */,
 				DEF637DD8762ADA7F99D6474 /* LoginItemController.swift in Sources */,
-				CDBCBCB8F8EEE5B5CB8B040F /* MenuContentView.swift in Sources */,
+				CDBCBCB8F8EEE5B5CB8B040F /* StatusMenuController.swift in Sources */,
 				A029FA2C7A955768257E12F1 /* PreferencesView.swift in Sources */,
 				DCB3B76810F7AB489F315FEE /* ShortcutRecorder.swift in Sources */,
 				AFDC5AF201CA1552FCED17EE /* WindowMinderApp.swift in Sources */,
