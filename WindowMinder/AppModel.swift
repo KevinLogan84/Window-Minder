@@ -19,6 +19,8 @@ final class AppModel {
     private let accessibilityChanges = AccessibilityChangeObserver()
     private static let deniedStatusMessage = "Accessibility access is not granted."
     private static weak var trustRefreshTarget: AppModel?
+    private var windowOperation: Task<Void, Never>?
+    private var menuBarGeneration = 0
 
     var autoRestore: Bool {
         didSet { defaults.set(autoRestore, forKey: Keys.autoRestore) }
@@ -51,6 +53,7 @@ final class AppModel {
     }
 
     var accessibilityTrusted = false
+    var menuBarActivity: MenuBarActivity = .idle
     var layouts: [SavedLayout] = []
     var currentConfigurationKey: String?
     var displaySummary = "Displays"
@@ -153,15 +156,44 @@ final class AppModel {
         updateTrustPolling()
     }
 
+    var isWindowOperationRunning: Bool {
+        windowOperation != nil
+    }
+
+    var menuBarSymbol: String {
+        switch menuBarActivity {
+        case .idle:
+            return "macwindow"
+        case .busy:
+            return "hourglass"
+        case .success:
+            return "checkmark.circle"
+        }
+    }
+
+    var menuBarAccessibilityLabel: String {
+        switch menuBarActivity {
+        case .idle:
+            return "Window Minder"
+        case .busy, .success:
+            return statusMessage ?? "Window Minder"
+        }
+    }
+
     func storeNow() {
-        guard trustOrExplain() else { return }
-        statusMessage = coordinator?.storeCurrent() ?? "Window Minder is still starting."
-        reloadLayouts()
+        guard beginWindowOperation(starting: "Storing windows…") else { return }
+        windowOperation = Task { @MainActor in
+            let message = await self.coordinator?.storeCurrent() ?? "Window Minder is still starting."
+            self.finishWindowOperation(message)
+        }
     }
 
     func restoreNow() {
-        guard trustOrExplain() else { return }
-        statusMessage = coordinator?.restoreCurrent() ?? "Window Minder is still starting."
+        guard beginWindowOperation(starting: "Restoring windows…") else { return }
+        windowOperation = Task { @MainActor in
+            let message = await self.coordinator?.restoreCurrent() ?? "Window Minder is still starting."
+            self.finishWindowOperation(message)
+        }
     }
 
     func deleteLayout(key: String) {
@@ -264,6 +296,39 @@ final class AppModel {
 
     var loginTitle: String {
         LoginItemPresentation.title(for: loginState)
+    }
+
+    private func beginWindowOperation(starting: String) -> Bool {
+        guard windowOperation == nil else { return false }
+        guard trustOrExplain() else { return false }
+        guard coordinator != nil else {
+            statusMessage = "Window Minder is still starting."
+            return false
+        }
+        menuBarGeneration += 1
+        menuBarActivity = .busy
+        statusMessage = starting
+        return true
+    }
+
+    private func finishWindowOperation(_ message: String) {
+        windowOperation = nil
+        if !message.isEmpty {
+            statusMessage = message
+        }
+        reloadLayouts()
+        guard message.hasPrefix("Stored ") || message.hasPrefix("Restored ") else {
+            menuBarActivity = .idle
+            return
+        }
+        menuBarGeneration += 1
+        let generation = menuBarGeneration
+        menuBarActivity = .success
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard generation == self.menuBarGeneration else { return }
+            self.menuBarActivity = .idle
+        }
     }
 
     private func trustOrExplain() -> Bool {

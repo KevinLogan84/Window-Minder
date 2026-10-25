@@ -35,6 +35,11 @@ final class LayoutCoordinator {
     private var screenWork: DispatchWorkItem?
     private var wakeWork: DispatchWorkItem?
     private var observers: [NSObjectProtocol] = []
+    private var snapshotTask: Task<Void, Never>?
+    private var axLock = false
+    private var axWaiters: [CheckedContinuation<Void, Never>] = []
+    private var suppressDisplayReaction = false
+    private var displayTask: Task<Void, Never>?
 
     private struct Snapshot {
         var configuration: DisplayConfiguration
@@ -71,10 +76,12 @@ final class LayoutCoordinator {
     }
 
     @discardableResult
-    func storeCurrent() -> String {
+    func storeCurrent() async -> String {
         guard accessibility.isTrusted else {
             return "Accessibility access is not granted."
         }
+        await acquireAX()
+        defer { releaseAX() }
         let configuration = displays.current()
         guard !configuration.displays.isEmpty else {
             return "No displays were found."
@@ -83,33 +90,39 @@ final class LayoutCoordinator {
         guard height > 0 else {
             return "The primary display size is unavailable."
         }
+        let targets = accessibility.scanTargets(ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers)
+        let report = await AXWindowWork.capture(targets: targets, primaryHeight: height, trace: .store)
+        let appCount = Set(report.windows.map(\.bundleIdentifier)).count
+        let outcome = StoreOutcome.make(
+            windowCount: report.windows.count,
+            appCount: appCount,
+            appsScanned: report.appsScanned,
+            appsTimedOut: report.appsTimedOut
+        )
+        guard outcome.shouldSave else { return outcome.message }
+        let layout = SavedLayout(
+            version: SavedLayout.currentVersion,
+            key: configuration.key,
+            savedAt: Date(),
+            displays: configuration.displays,
+            windows: report.windows
+        )
         do {
-            let captured = try accessibility.captureWindows(
-                ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers,
-                primaryHeight: height
-            )
-            let layout = SavedLayout(
-                version: SavedLayout.currentVersion,
-                key: configuration.key,
-                savedAt: Date(),
-                displays: configuration.displays,
-                windows: captured.map(\.record)
-            )
             try store.save(layout)
-            if acceptingSnapshots {
-                snapshot = Snapshot(configuration: configuration, windows: layout.windows, capturedAt: layout.savedAt)
-            }
-            onLayoutsChanged()
-            return layout.windows.count == 1 ? "Stored 1 window." : "Stored \(layout.windows.count) windows."
         } catch {
             return error.localizedDescription
         }
+        if acceptingSnapshots, displays.current().key == configuration.key {
+            snapshot = Snapshot(configuration: configuration, windows: layout.windows, capturedAt: layout.savedAt)
+        }
+        onLayoutsChanged()
+        return outcome.message
     }
 
     /// `announceWhenIdle` is for an explicit Restore. Automatic restore stays quiet when
     /// there is nothing to do, so a display change does not fill the menu with status text.
     @discardableResult
-    func restoreCurrent(announceWhenIdle: Bool = true) -> String {
+    func restoreCurrent(announceWhenIdle: Bool = true) async -> String {
         guard accessibility.isTrusted else {
             return announceWhenIdle ? "Accessibility access is not granted." : ""
         }
@@ -130,18 +143,21 @@ final class LayoutCoordinator {
         } catch {
             return error.localizedDescription
         }
-        let report = accessibility.restore(
-            records: layout.windows,
+        await acquireAX()
+        defer { releaseAX() }
+        suppressDisplayReaction = true
+        defer { suppressDisplayReaction = false }
+        let targets = accessibility.scanTargets(ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers)
+        let report = await AXWindowWork.restore(
+            targets: targets,
+            saved: layout.windows,
             ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers,
             primaryHeight: height
         )
-        if report.restored == 0 && report.failed == 0 {
-            return announceWhenIdle ? "No matching windows to restore." : ""
+        if !announceWhenIdle, report.summary.restored == 0, report.summary.failed == 0 {
+            return ""
         }
-        if report.failed == 0 {
-            return report.restored == 1 ? "Restored 1 window." : "Restored \(report.restored) windows."
-        }
-        return "Restored \(report.restored) windows. \(report.failed) could not be moved."
+        return report.summary.message
     }
 
     private func observeScreenChanges() {
@@ -171,6 +187,7 @@ final class LayoutCoordinator {
     }
 
     private func screenParametersChanged() {
+        guard !suppressDisplayReaction else { return }
         acceptingSnapshots = false
         snapshotTimer?.invalidate()
         snapshotTimer = nil
@@ -208,18 +225,29 @@ final class LayoutCoordinator {
                 notes.append("Could not save the previous display setup.")
             }
         }
-        if settings().autoRestore, keyChanged, !newConfiguration.displays.isEmpty {
-            let message = restoreCurrent(announceWhenIdle: false)
-            if !message.isEmpty {
-                notes.append(message)
-            }
-        }
+        let shouldRestore = settings().autoRestore && keyChanged && !newConfiguration.displays.isEmpty
         if !notes.isEmpty {
             onStatus(notes.joined(separator: " "))
         }
-        acceptingSnapshots = true
-        refreshSnapshot()
-        startSnapshotTimer()
+        displayTask?.cancel()
+        displayTask = Task { @MainActor in
+            if shouldRestore {
+                let message = await self.restoreCurrent(announceWhenIdle: false)
+                guard !Task.isCancelled else { return }
+                if !message.isEmpty {
+                    let combined = (notes + [message]).joined(separator: " ")
+                    self.onStatus(combined)
+                }
+            }
+            guard !Task.isCancelled else { return }
+            guard self.displays.current().key == newConfiguration.key else {
+                self.screenParametersChanged()
+                return
+            }
+            self.acceptingSnapshots = true
+            self.refreshSnapshot()
+            self.startSnapshotTimer()
+        }
     }
 
     private func wake() {
@@ -237,28 +265,48 @@ final class LayoutCoordinator {
     }
 
     private func commitWake() {
-        if settings().autoRestore {
-            let message = restoreCurrent(announceWhenIdle: false)
-            if !message.isEmpty {
-                onStatus(message)
+        let shouldRestore = settings().autoRestore
+        Task { @MainActor in
+            if shouldRestore {
+                let message = await self.restoreCurrent(announceWhenIdle: false)
+                if !message.isEmpty {
+                    self.onStatus(message)
+                }
             }
+            self.acceptingSnapshots = true
+            self.refreshSnapshot()
+            self.startSnapshotTimer()
         }
-        acceptingSnapshots = true
-        refreshSnapshot()
-        startSnapshotTimer()
     }
 
     private func refreshSnapshot() {
+        guard acceptingSnapshots, accessibility.isTrusted, snapshotTask == nil else { return }
+        snapshotTask = Task { @MainActor in
+            defer { self.snapshotTask = nil }
+            await self.writeSnapshot()
+        }
+    }
+
+    private func writeSnapshot() async {
         guard acceptingSnapshots, accessibility.isTrusted else { return }
+        await acquireAX()
+        defer { releaseAX() }
+        guard acceptingSnapshots else { return }
         let configuration = displays.current()
         guard !configuration.displays.isEmpty else { return }
         let height = displays.primaryHeight()
         guard height > 0 else { return }
-        guard let captured = try? accessibility.captureWindows(
-            ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers,
-            primaryHeight: height
-        ) else { return }
-        snapshot = Snapshot(configuration: configuration, windows: captured.map(\.record), capturedAt: Date())
+        let targets = accessibility.scanTargets(ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers)
+        let report = await AXWindowWork.capture(targets: targets, primaryHeight: height, trace: .snapshot)
+        guard acceptingSnapshots, displays.current().key == configuration.key else { return }
+        let outcome = StoreOutcome.make(
+            windowCount: report.windows.count,
+            appCount: Set(report.windows.map(\.bundleIdentifier)).count,
+            appsScanned: report.appsScanned,
+            appsTimedOut: report.appsTimedOut
+        )
+        guard outcome.shouldSave else { return }
+        snapshot = Snapshot(configuration: configuration, windows: report.windows, capturedAt: Date())
     }
 
     private func startSnapshotTimer() {
@@ -281,6 +329,30 @@ final class LayoutCoordinator {
 
     private func periodicSave() {
         guard acceptingSnapshots, settings().periodicAutoSave else { return }
-        onStatus(storeCurrent())
+        Task { @MainActor in
+            let message = await self.storeCurrent()
+            if !message.isEmpty {
+                self.onStatus(message)
+            }
+        }
+    }
+
+    private func acquireAX() async {
+        if !axLock {
+            axLock = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            axWaiters.append(continuation)
+        }
+    }
+
+    private func releaseAX() {
+        if axWaiters.isEmpty {
+            axLock = false
+            return
+        }
+        let next = axWaiters.removeFirst()
+        next.resume()
     }
 }

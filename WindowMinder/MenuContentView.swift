@@ -21,12 +21,12 @@ struct MenuContentView: View {
             Button("Store Windows Now") {
                 model.storeNow()
             }
-            .disabled(!AccessibilityTrustPolling.menuAllowsWindowActions(isTrusted: model.accessibilityTrusted))
+            .disabled(model.isWindowOperationRunning || !AccessibilityTrustPolling.menuAllowsWindowActions(isTrusted: model.accessibilityTrusted))
 
             Button("Restore Windows Now") {
                 model.restoreNow()
             }
-            .disabled(!AccessibilityTrustPolling.menuAllowsWindowActions(isTrusted: model.accessibilityTrusted))
+            .disabled(model.isWindowOperationRunning || !AccessibilityTrustPolling.menuAllowsWindowActions(isTrusted: model.accessibilityTrusted))
 
             if let statusMessage = model.statusMessage {
                 Text(statusMessage)
