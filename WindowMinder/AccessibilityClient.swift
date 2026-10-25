@@ -49,10 +49,11 @@ final class AccessibilityClient {
     /// copy is API-disabled. API-disabled fails immediately; the timeout only
     /// bounds a trusted-but-unresponsive call.
     private func liveProbeError() -> Int32 {
-        var errors = [copyAttributeError(AXUIElementCreateSystemWide(), attribute(kAXFocusedApplicationAttribute))]
+        // These kAX constants are String in Swift. Cast both to CFString the same way.
+        var errors = [copyAttributeError(AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as CFString)]
         if errors[0] == AccessibilityAPIErrorCode.apiDisabled,
            let application = frontmostApplicationElement() {
-            errors.append(copyAttributeError(application, attribute(kAXWindowsAttribute)))
+            errors.append(copyAttributeError(application, kAXWindowsAttribute as CFString))
         }
         return AccessibilityTrustDecision.preferredProbeError(errors)
     }
@@ -70,14 +71,6 @@ final class AccessibilityClient {
         let error = AXUIElementCopyAttributeValue(element, name, &value)
         _ = value
         return error.rawValue
-    }
-
-    private func attribute(_ value: CFString) -> CFString {
-        value
-    }
-
-    private func attribute(_ value: Unmanaged<CFString>) -> CFString {
-        value.takeUnretainedValue()
     }
 
     func openSettings() {

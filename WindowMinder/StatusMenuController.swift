@@ -208,7 +208,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         image?.isTemplate = true
         button.image = image
         button.imagePosition = .imageOnly
-        button.accessibilityLabel = description
+        button.setAccessibilityLabel(description)
     }
 
     @objc nonisolated private func storeWindows(_ sender: NSMenuItem) {
