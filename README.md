@@ -92,3 +92,7 @@ tccutil reset Accessibility com.kevinlogan.WindowMinder
 ## Privacy
 
 Window Minder does not use the network. It does not collect analytics, show ads, or require an account.
+
+## Feedback
+
+Questions or feedback: kevinlogan@mail.grokbot.com
