@@ -14,5 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        model.refreshAccessibilityTrust()
     }
 }

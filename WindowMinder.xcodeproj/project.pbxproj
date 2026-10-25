@@ -25,6 +25,8 @@
 		CC8356EA0063A1D9CC24BFBD /* SavedLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B0633D9F40A799AB8F67063 /* SavedLayout.swift */; };
 		E78DA8F1AABC927A6A6B1588 /* WMGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D593DCA3E7D911F5E022FF6C /* WMGeometry.swift */; };
 		7E10C4E0923B9A7829C586CA /* WindowMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33C3F2E51A66FA353B276F2 /* WindowMatcher.swift */; };
+		19F0C3A8D7E24B65A1C9E0F4 /* AccessibilityTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4A17C90B2D64F18A6C3E5D0 /* AccessibilityTrust.swift */; };
+		C6F14A90E2B73D58A4C1E7B0 /* LoginItemStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8B5E21A0C74F96B2E1D4A8 /* LoginItemStatus.swift */; };
 		3799C8352086EE0C0A0A1F12 /* CoordinateConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1705EB484B6079253A5D31F9 /* CoordinateConverter.swift */; };
 		69DDCCE15F5051946E0DA90E /* DisplayConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAB7667E86805BE8634BC811 /* DisplayConfiguration.swift */; };
 		4F99FBD051E73B0C5446D15F /* LayoutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66FB0E8F7E05149E7168F2AE /* LayoutStore.swift */; };
@@ -32,6 +34,9 @@
 		0DC6F24F2358ABFF041F3BC3 /* SavedLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B0633D9F40A799AB8F67063 /* SavedLayout.swift */; };
 		7B5E6A2D2D1EF30D3D322FA7 /* WMGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D593DCA3E7D911F5E022FF6C /* WMGeometry.swift */; };
 		37D15EBB323F18B32FEFF903 /* WindowMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = C33C3F2E51A66FA353B276F2 /* WindowMatcher.swift */; };
+		7A2E6B14C8D90F35E1A4B6C7 /* AccessibilityTrust.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4A17C90B2D64F18A6C3E5D0 /* AccessibilityTrust.swift */; };
+		50A9E3C7B1D64F28C0E5A3D9 /* LoginItemStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8B5E21A0C74F96B2E1D4A8 /* LoginItemStatus.swift */; };
+		F27C0E5A9B184D36C4A7E1B2 /* AppStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B4D1F6A2C904E73B5A8D1C6 /* AppStatusTests.swift */; };
 		B471E60FA2382D9BDB7E2239 /* CoordinateConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B99F0103E33F7FD786F49D1F /* CoordinateConverterTests.swift */; };
 		098D899CA0BA883EF73663E3 /* DisplayConfigKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16B9C5E5209D750510C2BDBE /* DisplayConfigKeyTests.swift */; };
 		110541198E57E0EDDDDBE939 /* LayoutStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAC24C02E957ACD05131042E /* LayoutStoreTests.swift */; };
@@ -57,6 +62,9 @@
 		3B0633D9F40A799AB8F67063 /* SavedLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavedLayout.swift; sourceTree = "<group>"; };
 		D593DCA3E7D911F5E022FF6C /* WMGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WMGeometry.swift; sourceTree = "<group>"; };
 		C33C3F2E51A66FA353B276F2 /* WindowMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowMatcher.swift; sourceTree = "<group>"; };
+		E4A17C90B2D64F18A6C3E5D0 /* AccessibilityTrust.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityTrust.swift; sourceTree = "<group>"; };
+		3D8B5E21A0C74F96B2E1D4A8 /* LoginItemStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItemStatus.swift; sourceTree = "<group>"; };
+		8B4D1F6A2C904E73B5A8D1C6 /* AppStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStatusTests.swift; sourceTree = "<group>"; };
 		B99F0103E33F7FD786F49D1F /* CoordinateConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateConverterTests.swift; sourceTree = "<group>"; };
 		16B9C5E5209D750510C2BDBE /* DisplayConfigKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayConfigKeyTests.swift; sourceTree = "<group>"; };
 		AAC24C02E957ACD05131042E /* LayoutStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutStoreTests.swift; sourceTree = "<group>"; };
@@ -114,6 +122,8 @@
 				3B0633D9F40A799AB8F67063 /* SavedLayout.swift */,
 				D593DCA3E7D911F5E022FF6C /* WMGeometry.swift */,
 				C33C3F2E51A66FA353B276F2 /* WindowMatcher.swift */,
+				E4A17C90B2D64F18A6C3E5D0 /* AccessibilityTrust.swift */,
+				3D8B5E21A0C74F96B2E1D4A8 /* LoginItemStatus.swift */,
 			);
 			path = WindowMinderCore;
 			sourceTree = "<group>";
@@ -134,6 +144,7 @@
 				AAC24C02E957ACD05131042E /* LayoutStoreTests.swift */,
 				9F4F42669B7DF06A7EDDC548 /* SHA256Tests.swift */,
 				5C75633071EC6AF705543D7D /* WindowMatcherTests.swift */,
+				8B4D1F6A2C904E73B5A8D1C6 /* AppStatusTests.swift */,
 			);
 			path = WindowMinderCoreTests;
 			sourceTree = "<group>";
@@ -207,6 +218,8 @@
 				CC8356EA0063A1D9CC24BFBD /* SavedLayout.swift in Sources */,
 				E78DA8F1AABC927A6A6B1588 /* WMGeometry.swift in Sources */,
 				7E10C4E0923B9A7829C586CA /* WindowMatcher.swift in Sources */,
+				19F0C3A8D7E24B65A1C9E0F4 /* AccessibilityTrust.swift in Sources */,
+				C6F14A90E2B73D58A4C1E7B0 /* LoginItemStatus.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -221,6 +234,9 @@
 				0DC6F24F2358ABFF041F3BC3 /* SavedLayout.swift in Sources */,
 				7B5E6A2D2D1EF30D3D322FA7 /* WMGeometry.swift in Sources */,
 				37D15EBB323F18B32FEFF903 /* WindowMatcher.swift in Sources */,
+				7A2E6B14C8D90F35E1A4B6C7 /* AccessibilityTrust.swift in Sources */,
+				50A9E3C7B1D64F28C0E5A3D9 /* LoginItemStatus.swift in Sources */,
+				F27C0E5A9B184D36C4A7E1B2 /* AppStatusTests.swift in Sources */,
 				B471E60FA2382D9BDB7E2239 /* CoordinateConverterTests.swift in Sources */,
 				098D899CA0BA883EF73663E3 /* DisplayConfigKeyTests.swift in Sources */,
 				110541198E57E0EDDDDBE939 /* LayoutStoreTests.swift in Sources */,
@@ -317,7 +333,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
@@ -350,7 +366,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
@@ -379,7 +395,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
@@ -422,7 +438,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
@@ -461,7 +477,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
@@ -504,7 +520,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;

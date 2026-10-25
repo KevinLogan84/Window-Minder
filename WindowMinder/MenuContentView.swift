@@ -8,7 +8,7 @@ struct MenuContentView: View {
         @Bindable var model = model
 
         Group {
-            if !model.accessibilityTrusted {
+            if AccessibilityTrustPolling.showsAccessDenied(isTrusted: model.accessibilityTrusted) {
                 Text("Accessibility Access Not Granted")
                 Button("Open Accessibility Settings…") {
                     model.openAccessibilitySettings()
@@ -21,12 +21,12 @@ struct MenuContentView: View {
             Button("Store Windows Now") {
                 model.storeNow()
             }
-            .disabled(!model.accessibilityTrusted)
+            .disabled(!AccessibilityTrustPolling.menuAllowsWindowActions(isTrusted: model.accessibilityTrusted))
 
             Button("Restore Windows Now") {
                 model.restoreNow()
             }
-            .disabled(!model.accessibilityTrusted)
+            .disabled(!AccessibilityTrustPolling.menuAllowsWindowActions(isTrusted: model.accessibilityTrusted))
 
             if let statusMessage = model.statusMessage {
                 Text(statusMessage)
@@ -90,17 +90,16 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var loginControl: some View {
-        switch model.loginState {
-        case .enabled, .notRegistered:
+        if LoginItemPresentation.showsToggle(model.loginState) {
             Toggle(model.loginTitle, isOn: Binding(
-                get: { model.loginState == .enabled },
+                get: { LoginItemPresentation.isEnabled(model.loginState) },
                 set: { enabled in
-                    if enabled != (model.loginState == .enabled) {
+                    if enabled != LoginItemPresentation.isEnabled(model.loginState) {
                         model.toggleLoginItem()
                     }
                 }
             ))
-        case .requiresApproval, .notFound, .unknown:
+        } else {
             Button(model.loginTitle) {
                 model.toggleLoginItem()
             }

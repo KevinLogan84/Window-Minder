@@ -22,7 +22,7 @@ Window frames are stored in Cocoa coordinates (origin at the bottom-left of the 
 - **Auto-restore** is on by default. Window Minder restores the matching layout when displays are connected or disconnected, and shortly after the Mac wakes so windows exist again. If nothing is saved for that setup, the windows stay where they are.
 - **Save before a display change** is on by default. The app keeps an in-memory snapshot while the setup is stable. The screen notification arrives after the change, so that earlier snapshot is what gets saved for the previous setup.
 - **Periodic auto-save** is off by default. Turn it on to write the current layout every 2 minutes.
-- **Launch at Login** uses `SMAppService.mainApp` and shows the real registration status.
+- **Launch at Login** uses `SMAppService.mainApp`. Before the first registration, status is `.notFound`. The menu shows that as an unchecked **Launch at Login**, including when the app is in `~/Applications`. An error is shown only if `register()` fails.
 - **Ignored apps** are left alone. Window Minder always ignores itself. You can ignore the frontmost app and remove apps later.
 - **Shortcuts** default to Control-Option-Command-S (store) and Control-Option-Command-R (restore). They are registered with Carbon so they work when another app is focused. The key code and modifiers are saved. If registration fails, Preferences says so.
 
@@ -35,6 +35,8 @@ If access is not granted, the menu says so and includes **Open Accessibility Set
 System Settings > Privacy & Security > Accessibility
 
 Enable Window Minder there. Nothing is stored or restored until that permission is on.
+
+The menu re-checks `AXIsProcessTrusted` about once a second until access is granted, and also when the menu opens, when the app becomes active, and when macOS posts `com.apple.accessibility.api`. Store and Restore turn on as soon as that check succeeds. Polling stops once access is granted.
 
 ## Build and test
 
@@ -50,9 +52,42 @@ The Mac app and the same tests:
 xcodebuild test -scheme WindowMinder -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 
-Open `WindowMinder.xcodeproj` and run the shared **WindowMinder** scheme to launch the menu bar app. The project does not require a development team. Code signing is disabled, the app is not sandboxed, and the hardened runtime is off. The minimum system is macOS 14.
+Open `WindowMinder.xcodeproj` and run the shared **WindowMinder** scheme to launch the menu bar app. The project does not require a development team. The default identity is ad-hoc (`CODE_SIGN_IDENTITY` = `-`). The app is not sandboxed, and the hardened runtime is off. The minimum system is macOS 14.
 
-`xcodebuild test` builds the app and runs the logic tests for display-setup keys, layout files, window matching, and coordinate conversion. Those tests do not need Accessibility permission.
+`xcodebuild test` builds the app and runs the logic tests for display-setup keys, layout files, window matching, and coordinate conversion. Those tests do not need Accessibility permission. CI passes `CODE_SIGNING_ALLOWED=NO`, which still overrides the project and leaves the build unsigned.
+
+## Stable code signing
+
+Ad-hoc signing gives the app a new cdhash on every rebuild. macOS then treats it as a different binary, and an Accessibility grant stops applying. A local self-signed identity named **Window Minder Dev** keeps the same designated requirement across rebuilds. The project does not require that identity. Passing `CODE_SIGN_IDENTITY` overrides the ad-hoc default. `CODE_SIGNING_ALLOWED=NO` still skips signing.
+
+Create the identity once in Keychain Access:
+
+1. Open Keychain Access.
+2. Choose Certificate Assistant > Create a Certificate.
+3. Name it `Window Minder Dev`.
+4. Set Identity Type to Self-Signed Root.
+5. Set Certificate Type to Code Signing.
+6. Create it in the login keychain.
+
+Build with that identity:
+
+```sh
+xcodebuild -scheme WindowMinder -destination 'platform=macOS' \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="Window Minder Dev" \
+  CODE_SIGNING_ALLOWED=YES \
+  CODE_SIGNING_REQUIRED=NO \
+  DEVELOPMENT_TEAM= \
+  build
+```
+
+`scripts/build-dev-signed.sh` runs the same build. It does not read the Keychain. The app does not read the Keychain either.
+
+If Accessibility was granted to an older ad-hoc build and the menu still says access is not granted, reset the grant and enable Window Minder again:
+
+```sh
+tccutil reset Accessibility com.kevinlogan.WindowMinder
+```
 
 ## Privacy
 

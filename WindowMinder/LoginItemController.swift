@@ -1,14 +1,6 @@
 import Foundation
 import ServiceManagement
 
-enum LoginItemState: Equatable {
-    case enabled
-    case notRegistered
-    case requiresApproval
-    case notFound
-    case unknown
-}
-
 @MainActor
 struct LoginItemController {
     func state() -> LoginItemState {
@@ -20,6 +12,7 @@ struct LoginItemController {
         case .requiresApproval:
             return .requiresApproval
         case .notFound:
+            // Normal before the first register(), including when the app is in ~/Applications.
             return .notFound
         @unknown default:
             return .unknown

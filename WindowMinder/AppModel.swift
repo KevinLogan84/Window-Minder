@@ -14,6 +14,11 @@ final class AppModel {
     private var didStart = false
     private var externalFrontmostBundleID: String?
     private var frontmostObserver: NSObjectProtocol?
+    private var trustObservers: [NSObjectProtocol] = []
+    private var trustPollTimer: Timer?
+    private let accessibilityChanges = AccessibilityChangeObserver()
+    private static let deniedStatusMessage = "Accessibility access is not granted."
+    private static weak var trustRefreshTarget: AppModel?
 
     var autoRestore: Bool {
         didSet { defaults.set(autoRestore, forKey: Keys.autoRestore) }
@@ -63,6 +68,7 @@ final class AppModel {
         storeHotkey = Self.hotkey(defaults, codeKey: Keys.storeHotkeyKeyCode, modifierKey: Keys.storeHotkeyModifiers)
         restoreHotkey = Self.hotkey(defaults, codeKey: Keys.restoreHotkeyKeyCode, modifierKey: Keys.restoreHotkeyModifiers)
         ignoredBundleIDs = Array(Set(defaults.stringArray(forKey: Keys.ignoredBundleIDs) ?? [])).sorted()
+        Self.trustRefreshTarget = self
     }
 
     func start() {
@@ -99,7 +105,9 @@ final class AppModel {
         }
         registerHotkeys()
         observeFrontmostApp()
+        observeAccessibilityTrust()
         accessibilityTrusted = accessibility.promptForTrust()
+        updateTrustPolling()
         coordinator.start()
         reloadLayouts()
         loginState = loginItems.state()
@@ -125,15 +133,24 @@ final class AppModel {
     }
 
     func refreshForMenu() {
-        let trusted = accessibility.isTrusted
-        if accessibilityTrusted != trusted {
-            accessibilityTrusted = trusted
-        }
+        refreshAccessibilityTrust()
         let state = loginItems.state()
         if loginState != state {
             loginState = state
         }
         reloadLayouts()
+    }
+
+    /// Re-reads `AXIsProcessTrusted` on the main actor and starts or stops the one-second poll.
+    func refreshAccessibilityTrust() {
+        let trusted = accessibility.isTrusted
+        if accessibilityTrusted != trusted {
+            accessibilityTrusted = trusted
+        }
+        if trusted, statusMessage == Self.deniedStatusMessage {
+            statusMessage = nil
+        }
+        updateTrustPolling()
     }
 
     func storeNow() {
@@ -160,17 +177,14 @@ final class AppModel {
     func toggleLoginItem() {
         do {
             loginState = try loginItems.toggle()
-            switch loginState {
-            case .requiresApproval:
-                loginMessage = "Approve Window Minder in System Settings > General > Login Items & Extensions."
-            case .notFound:
-                loginMessage = "Launch at Login could not find the app. Move Window Minder to the Applications folder and try again."
-            case .enabled, .notRegistered, .unknown:
-                loginMessage = nil
-            }
+            loginMessage = LoginItemPresentation.message(for: loginState)
         } catch {
             loginState = loginItems.state()
-            loginMessage = "Launch at Login could not be updated. \(error.localizedDescription)"
+            loginMessage = LoginItemPresentation.registrationFailureMessage(
+                errorDescription: error.localizedDescription,
+                bundlePath: Bundle.main.bundlePath,
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            )
         }
     }
 
@@ -249,25 +263,73 @@ final class AppModel {
     }
 
     var loginTitle: String {
-        switch loginState {
-        case .enabled, .notRegistered:
-            return "Launch at Login"
-        case .requiresApproval:
-            return "Launch at Login (Approval Required)"
-        case .notFound:
-            return "Launch at Login (Not Found)"
-        case .unknown:
-            return "Launch at Login (Unknown Status)"
-        }
+        LoginItemPresentation.title(for: loginState)
     }
 
     private func trustOrExplain() -> Bool {
-        accessibilityTrusted = accessibility.isTrusted
+        refreshAccessibilityTrust()
         guard accessibilityTrusted else {
-            statusMessage = "Accessibility access is not granted."
+            statusMessage = Self.deniedStatusMessage
             return false
         }
         return true
+    }
+
+    private func observeAccessibilityTrust() {
+        Self.trustRefreshTarget = self
+        accessibilityChanges.onChange = { [weak self] in
+            self?.refreshAccessibilityTrust()
+        }
+        accessibilityChanges.start()
+
+        trustObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                MainActor.assumeIsolated {
+                    AppModel.trustRefreshTarget?.refreshAccessibilityTrust()
+                }
+            }
+        )
+        trustObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSMenu.didBeginTrackingNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                MainActor.assumeIsolated {
+                    AppModel.trustRefreshTarget?.refreshAccessibilityTrust()
+                }
+            }
+        )
+    }
+
+    private func updateTrustPolling() {
+        if AccessibilityTrustPolling.shouldPoll(isTrusted: accessibilityTrusted) {
+            startTrustPollingIfNeeded()
+        } else {
+            stopTrustPolling()
+        }
+    }
+
+    private func startTrustPollingIfNeeded() {
+        guard trustPollTimer == nil else { return }
+        let timer = Timer(timeInterval: AccessibilityTrustPolling.interval, repeats: true) { _ in
+            // The timer is on the main run loop, including menu tracking.
+            MainActor.assumeIsolated {
+                AppModel.trustRefreshTarget?.refreshAccessibilityTrust()
+            }
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        trustPollTimer = timer
+    }
+
+    private func stopTrustPolling() {
+        trustPollTimer?.invalidate()
+        trustPollTimer = nil
     }
 
     private func reloadLayouts() {
@@ -362,4 +424,30 @@ private enum Keys {
     static let restoreHotkeyKeyCode = "restoreHotkeyKeyCode"
     static let restoreHotkeyModifiers = "restoreHotkeyModifiers"
     static let ignoredBundleIDs = "ignoredBundleIDs"
+}
+
+/// Receives `com.apple.accessibility.api` even while System Settings is frontmost.
+@MainActor
+final class AccessibilityChangeObserver: NSObject {
+    private static weak var current: AccessibilityChangeObserver?
+    var onChange: (@MainActor () -> Void)?
+
+    func start() {
+        Self.current = self
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleAccessibilityAPINotification(_:)),
+            name: Notification.Name("com.apple.accessibility.api"),
+            object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
+    }
+
+    @objc nonisolated func handleAccessibilityAPINotification(_ notification: Notification) {
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                AccessibilityChangeObserver.current?.onChange?()
+            }
+        }
+    }
 }
