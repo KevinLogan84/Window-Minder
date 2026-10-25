@@ -53,6 +53,15 @@ final class WindowOperationTests: XCTestCase {
         XCTAssertEqual(apps.map(\.processIdentifier), [10, 13])
     }
 
+    func testSnapshotBackstopDoesNotRunAgainImmediately() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertTrue(SnapshotSchedule.shouldCapture(lastCapture: nil, now: now))
+        XCTAssertFalse(SnapshotSchedule.shouldCapture(lastCapture: now.addingTimeInterval(-1), now: now))
+        XCTAssertTrue(SnapshotSchedule.shouldCapture(lastCapture: now.addingTimeInterval(-4), now: now))
+        XCTAssertEqual(SnapshotSchedule.backstopInterval, 12)
+        XCTAssertGreaterThan(SnapshotSchedule.backstopInterval, SnapshotSchedule.minimumGap)
+    }
+
     func testTimeoutAndConcurrencyPlan() {
         XCTAssertEqual(WindowScanPlan.messagingTimeoutSeconds, 0.25)
         XCTAssertEqual(WindowScanPlan.maxConcurrentApps, 4)

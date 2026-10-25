@@ -25,6 +25,10 @@ struct AXRestoreReport: Sendable {
 
 /// Accessibility reads and writes. Each app element is used on one task.
 /// Callers keep AppKit and menu updates on the main actor.
+///
+/// Accessibility only returns windows on the current Space, and a window that
+/// belongs to an app that is not running is skipped. Window Minder does not
+/// launch apps or switch Spaces to find the rest.
 enum AXWindowWork {
     static func capture(
         targets: [ScanCandidate],

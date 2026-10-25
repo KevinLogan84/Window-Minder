@@ -11,7 +11,6 @@ struct LayoutAutomationSettings: Equatable {
 enum LayoutTiming {
     static let screenChangeDebounce: TimeInterval = 0.8
     static let wakeDelay: TimeInterval = 1.0
-    static let snapshotInterval: TimeInterval = 1.5
     static let periodicSaveInterval: TimeInterval = 120
 }
 
@@ -34,6 +33,10 @@ final class LayoutCoordinator {
     private var periodicTimer: Timer?
     private var screenWork: DispatchWorkItem?
     private var wakeWork: DispatchWorkItem?
+    private var activityWork: DispatchWorkItem?
+    private var lastSnapshotAt: Date?
+    private var displayChangePending = false
+    private var displayGeneration = 0
     private var observers: [NSObjectProtocol] = []
     private var snapshotTask: Task<Void, Never>?
     private var axLock = false
@@ -113,6 +116,7 @@ final class LayoutCoordinator {
             return error.localizedDescription
         }
         if acceptingSnapshots, displays.current().key == configuration.key {
+            lastSnapshotAt = layout.savedAt
             snapshot = Snapshot(configuration: configuration, windows: layout.windows, capturedAt: layout.savedAt)
         }
         onLayoutsChanged()
@@ -146,7 +150,7 @@ final class LayoutCoordinator {
         await acquireAX()
         defer { releaseAX() }
         suppressDisplayReaction = true
-        defer { suppressDisplayReaction = false }
+        defer { finishDisplaySuppression() }
         let targets = accessibility.scanTargets(ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers)
         let report = await AXWindowWork.restore(
             targets: targets,
@@ -186,11 +190,39 @@ final class LayoutCoordinator {
         observers.append(token)
     }
 
+    func noteUserActivity() {
+        guard acceptingSnapshots, accessibility.isTrusted else { return }
+        activityWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.refreshSnapshot()
+            }
+        }
+        activityWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + SnapshotSchedule.activityDelay, execute: work)
+    }
+
     private func screenParametersChanged() {
-        guard !suppressDisplayReaction else { return }
         acceptingSnapshots = false
         snapshotTimer?.invalidate()
         snapshotTimer = nil
+        activityWork?.cancel()
+        activityWork = nil
+        guard !suppressDisplayReaction else {
+            displayChangePending = true
+            return
+        }
+        scheduleScreenCommit()
+    }
+
+    private func finishDisplaySuppression() {
+        suppressDisplayReaction = false
+        guard displayChangePending else { return }
+        displayChangePending = false
+        scheduleScreenCommit()
+    }
+
+    private func scheduleScreenCommit() {
         screenWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
@@ -229,17 +261,24 @@ final class LayoutCoordinator {
         if !notes.isEmpty {
             onStatus(notes.joined(separator: " "))
         }
+        displayGeneration += 1
+        let generation = displayGeneration
         displayTask?.cancel()
         displayTask = Task { @MainActor in
+            defer {
+                if self.displayGeneration == generation {
+                    self.displayTask = nil
+                }
+            }
             if shouldRestore {
                 let message = await self.restoreCurrent(announceWhenIdle: false)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, self.displayGeneration == generation else { return }
                 if !message.isEmpty {
                     let combined = (notes + [message]).joined(separator: " ")
                     self.onStatus(combined)
                 }
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, self.displayGeneration == generation else { return }
             guard self.displays.current().key == newConfiguration.key else {
                 self.screenParametersChanged()
                 return
@@ -281,6 +320,7 @@ final class LayoutCoordinator {
 
     private func refreshSnapshot() {
         guard acceptingSnapshots, accessibility.isTrusted, snapshotTask == nil else { return }
+        guard SnapshotSchedule.shouldCapture(lastCapture: lastSnapshotAt, now: Date()) else { return }
         snapshotTask = Task { @MainActor in
             defer { self.snapshotTask = nil }
             await self.writeSnapshot()
@@ -306,12 +346,14 @@ final class LayoutCoordinator {
             appsTimedOut: report.appsTimedOut
         )
         guard outcome.shouldSave else { return }
-        snapshot = Snapshot(configuration: configuration, windows: report.windows, capturedAt: Date())
+        let capturedAt = Date()
+        lastSnapshotAt = capturedAt
+        snapshot = Snapshot(configuration: configuration, windows: report.windows, capturedAt: capturedAt)
     }
 
     private func startSnapshotTimer() {
         snapshotTimer?.invalidate()
-        snapshotTimer = Timer.scheduledTimer(withTimeInterval: LayoutTiming.snapshotInterval, repeats: true) { [weak self] _ in
+        snapshotTimer = Timer.scheduledTimer(withTimeInterval: SnapshotSchedule.backstopInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.refreshSnapshot()
             }

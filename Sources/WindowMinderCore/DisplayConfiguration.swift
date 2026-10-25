@@ -36,6 +36,16 @@ public struct DisplayConfiguration: Equatable, Codable, Sendable {
     }
 }
 
+public enum PrimaryDisplayHeight {
+    /// Height of the display at the Cocoa origin. If none is there, the first screen is the menu-bar display.
+    public static func points(frames: [WMRect]) -> Double {
+        if let primary = frames.first(where: { $0.x == 0 && $0.y == 0 && $0.height > 0 }) {
+            return primary.height
+        }
+        return frames.first(where: { $0.height > 0 })?.height ?? 0
+    }
+}
+
 enum DisplayConfigKey {
     static func make(_ displays: [DisplayDescriptor]) -> String {
         let lines = displays.map { display in

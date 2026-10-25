@@ -134,6 +134,19 @@ final class LayoutStoreTests: XCTestCase {
         XCTAssertEqual(try nestedStore.load(key: "alpha")?.windows.first?.windowTitle, "Nested")
     }
 
+    func testUnsupportedVersionIsRejectedAndDoesNotHideOtherLayouts() throws {
+        try store.save(sample(key: "beta", title: "Keep"))
+        let stale = """
+        {"displays":[],"key":"alpha","savedAt":"2023-11-14T22:13:20Z","version":2,"windows":[]}
+        """
+        try Data(stale.utf8).write(to: directory.appendingPathComponent("alpha.json"))
+        XCTAssertThrowsError(try store.load(key: "alpha")) { error in
+            XCTAssertEqual(error as? LayoutStoreError, .unsupportedVersion)
+        }
+        XCTAssertEqual(try store.list().map(\.key), ["beta"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("alpha.json").path))
+    }
+
     func testLayoutsDirectoryPath() {
         let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
         let url = LayoutLocation.layoutsDirectory(homeDirectory: home)

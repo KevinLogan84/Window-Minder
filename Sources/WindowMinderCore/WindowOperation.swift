@@ -68,6 +68,20 @@ public enum WindowScanFilter {
     }
 }
 
+public enum SnapshotSchedule {
+    /// How long a display setup can sit still before another snapshot.
+    public static let backstopInterval: TimeInterval = 12
+    /// Wait for the frontmost app to settle before reading its windows.
+    public static let activityDelay: TimeInterval = 0.8
+    /// Ignore a new request that arrives while the last snapshot is still fresh.
+    public static let minimumGap: TimeInterval = 4
+
+    public static func shouldCapture(lastCapture: Date?, now: Date, minimumGap: TimeInterval = minimumGap) -> Bool {
+        guard let lastCapture else { return true }
+        return now.timeIntervalSince(lastCapture) >= minimumGap
+    }
+}
+
 public enum WindowScanPlan {
     /// Unresponsive apps are abandoned instead of stalling the scan.
     public static let messagingTimeoutSeconds: Double = 0.25

@@ -33,10 +33,15 @@ struct DisplayCatalog {
 
     /// Height of the display whose bottom-left is the Cocoa origin.
     func primaryHeight() -> Double {
-        guard let primary = NSScreen.screens.first(where: { $0.frame.origin == .zero }) else {
-            return 0
+        let frames = NSScreen.screens.map { screen in
+            WMRect(
+                x: Double(screen.frame.origin.x),
+                y: Double(screen.frame.origin.y),
+                width: Double(screen.frame.size.width),
+                height: Double(screen.frame.size.height)
+            )
         }
-        return Double(primary.frame.height)
+        return PrimaryDisplayHeight.points(frames: frames)
     }
 
     func currentKey() -> String? {

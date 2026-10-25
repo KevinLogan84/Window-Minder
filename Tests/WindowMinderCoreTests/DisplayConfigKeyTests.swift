@@ -66,6 +66,62 @@ final class DisplayConfigKeyTests: XCTestCase {
         )
     }
 
+    func testPrimaryHeightUsesTheOriginDisplay() {
+        let builtIn = WMRect(x: 0, y: 0, width: 1512, height: 982)
+        let external = WMRect(x: 0, y: 982, width: 2560, height: 1440)
+        XCTAssertEqual(PrimaryDisplayHeight.points(frames: [external, builtIn]), 982)
+        XCTAssertEqual(PrimaryDisplayHeight.points(frames: [external]), 1440)
+        XCTAssertEqual(PrimaryDisplayHeight.points(frames: []), 0)
+    }
+
+    func testRenamedExternalDisplayKeepsTheKeyAndScaleDoesNot() {
+        let builtIn = display(
+            uuid: "BUILT-IN",
+            x: 0,
+            y: 0,
+            width: 1512,
+            height: 982,
+            pixelsWide: 3024,
+            pixelsHigh: 1964,
+            name: "Built-in Retina Display"
+        )
+        let external = display(
+            uuid: "LU28R55",
+            x: -2560,
+            y: -229,
+            width: 2560,
+            height: 1440,
+            pixelsWide: 3840,
+            pixelsHigh: 2160,
+            name: "LU28R55"
+        )
+        let renamed = display(
+            uuid: "LU28R55",
+            x: -2560,
+            y: -229,
+            width: 2560,
+            height: 1440,
+            pixelsWide: 3840,
+            pixelsHigh: 2160,
+            name: "Samsung"
+        )
+        let scaled = display(
+            uuid: "LU28R55",
+            x: -1920,
+            y: -49,
+            width: 1920,
+            height: 1080,
+            pixelsWide: 3840,
+            pixelsHigh: 2160,
+            name: "LU28R55"
+        )
+        let clamshell = DisplayConfiguration(displays: [external])
+        let desk = DisplayConfiguration(displays: [builtIn, external])
+        XCTAssertEqual(desk.key, DisplayConfiguration(displays: [renamed, builtIn]).key)
+        XCTAssertNotEqual(desk.key, DisplayConfiguration(displays: [builtIn, scaled]).key)
+        XCTAssertNotEqual(desk.key, clamshell.key)
+    }
+
     func testKeyIsStableAndFilesystemSafe() {
         let configuration = DisplayConfiguration(displays: [
             display(uuid: "37D8832A-2D66-02CA-B9F7-8F30A301B230", x: -1728.5, y: 0, name: "Left"),

@@ -133,6 +133,7 @@ final class AppModel {
     private func noteExternalFrontmost(_ bundleID: String?) {
         guard let bundleID, !bundleID.isEmpty, !isOwnBundle(bundleID) else { return }
         externalFrontmostBundleID = bundleID
+        coordinator?.noteUserActivity()
     }
 
     func refreshForMenu() {

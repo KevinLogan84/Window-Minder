@@ -38,7 +38,7 @@ struct PreferencesView: View {
             } header: {
                 Text("Automation")
             } footer: {
-                Text("Display changes are noticed about a second after they happen. The snapshot used for the previous setup was taken before that change.")
+                Text("Display changes settle for about a second. The previous setup is saved from the latest snapshot taken while that setup was still connected.")
                     .font(.callout)
             }
 
