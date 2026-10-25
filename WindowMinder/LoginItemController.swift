@@ -9,6 +9,7 @@ enum LoginItemState: Equatable {
     case unknown
 }
 
+@MainActor
 struct LoginItemController {
     func state() -> LoginItemState {
         switch SMAppService.mainApp.status {

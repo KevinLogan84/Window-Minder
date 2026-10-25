@@ -32,13 +32,11 @@ final class HotkeyCenter {
     }
 
     static func dispatch(id: UInt32) {
-        MainActor.assumeIsolated {
-            guard let center = shared else { return }
-            if id == 1 {
-                center.onStore()
-            } else if id == 2 {
-                center.onRestore()
-            }
+        guard let center = shared else { return }
+        if id == 1 {
+            center.onStore()
+        } else if id == 2 {
+            center.onRestore()
         }
     }
 
@@ -100,8 +98,12 @@ private let hotKeyEventHandler: EventHandlerUPP = { _, event, _ in
     )
     guard status == noErr else { return status }
     let identifier = hotKeyID.id
+    // Carbon delivers this on the main thread. Hop explicitly so the call stays
+    // legal if the queue closure is treated as nonisolated.
     DispatchQueue.main.async {
-        HotkeyCenter.dispatch(id: identifier)
+        MainActor.assumeIsolated {
+            HotkeyCenter.dispatch(id: identifier)
+        }
     }
     return noErr
 }

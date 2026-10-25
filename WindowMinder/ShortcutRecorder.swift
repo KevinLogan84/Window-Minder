@@ -80,8 +80,8 @@ struct ShortcutRecorder: View {
 
 private struct KeyDownCatcher: NSViewRepresentable {
     var isRecording: Bool
-    var onKey: (NSEvent) -> Void
-    var onStopped: () -> Void
+    var onKey: @MainActor (NSEvent) -> Void
+    var onStopped: @MainActor () -> Void
 
     func makeNSView(context: Context) -> KeyMonitorView {
         let view = KeyMonitorView()
@@ -97,9 +97,10 @@ private struct KeyDownCatcher: NSViewRepresentable {
     }
 }
 
+@MainActor
 private final class KeyMonitorView: NSView {
-    var onKey: ((NSEvent) -> Void)?
-    var onStopped: (() -> Void)?
+    var onKey: (@MainActor (NSEvent) -> Void)?
+    var onStopped: (@MainActor () -> Void)?
     var isRecording = false {
         didSet {
             guard isRecording != oldValue else { return }
@@ -123,10 +124,15 @@ private final class KeyMonitorView: NSView {
         }
         Self.active = self
         guard monitor == nil else { return }
+        // The handler is @Sendable and must return before the event is delivered.
+        // AppKit calls it on the main thread.
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.isRecording else { return event }
-            self.onKey?(event)
-            return nil
+            let consume = MainActor.assumeIsolated { () -> Bool in
+                guard let self, self.isRecording else { return false }
+                self.onKey?(event)
+                return true
+            }
+            return consume ? nil : event
         }
     }
 
@@ -141,11 +147,15 @@ private final class KeyMonitorView: NSView {
     }
 
     deinit {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-        }
-        if Self.active === self {
-            Self.active = nil
+        let monitor = self.monitor
+        // The view is released on the main thread. deinit itself is nonisolated.
+        MainActor.assumeIsolated {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            if Self.active === self {
+                Self.active = nil
+            }
         }
     }
 }
