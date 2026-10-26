@@ -30,7 +30,7 @@ struct PreferencesView: View {
 
             Section {
                 Toggle("Auto-restore layouts", isOn: $model.autoRestore)
-                    .accessibilityHint("Restores the matching layout when displays change and after the Mac wakes.")
+                    .accessibilityHint("Restores the matching layout when a dock is connected or disconnected, and after the Mac wakes or logs in.")
                 Toggle("Save layout before a display change", isOn: $model.saveBeforeDisplayChange)
                     .accessibilityHint("Keeps an in-memory snapshot and writes it for the previous display setup when displays change.")
                 Toggle("Periodically save the current layout", isOn: $model.periodicAutoSave)
@@ -38,7 +38,7 @@ struct PreferencesView: View {
             } header: {
                 Text("Automation")
             } footer: {
-                Text("Display changes settle for about a second. The previous setup is saved from the latest snapshot taken while that setup was still connected.")
+                Text("Display changes settle for a couple of seconds, so plugging in a dock is one restore. The previous setup is saved from the latest snapshot taken while that setup was still connected.")
                     .font(.callout)
             }
 

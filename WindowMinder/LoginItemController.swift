@@ -19,6 +19,15 @@ struct LoginItemController {
         }
     }
 
+    /// Registers only when the service has never been registered. `.notFound` is that state.
+    func registerIfNeeded() throws -> LoginItemState {
+        let service = SMAppService.mainApp
+        if service.status == .notFound {
+            try service.register()
+        }
+        return state()
+    }
+
     func toggle() throws -> LoginItemState {
         let service = SMAppService.mainApp
         switch service.status {

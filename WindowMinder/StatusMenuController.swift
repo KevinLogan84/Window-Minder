@@ -96,7 +96,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             action: #selector(toggleAutoRestore(_:)),
             state: model.autoRestore ? .on : .off
         ))
-        menu.items.last?.toolTip = "Restores the saved layout when displays change and after the Mac wakes."
+        menu.items.last?.toolTip = "Restores the saved layout when a dock is connected or disconnected, and after the Mac wakes or logs in."
 
         if LoginItemPresentation.showsToggle(model.loginState) {
             menu.addItem(actionItem(

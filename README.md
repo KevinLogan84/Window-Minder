@@ -6,7 +6,7 @@ It is a menu-bar-only app (`LSUIElement`): no Dock icon, no ads, no accounts, an
 
 ## What it saves
 
-A display setup is the set of connected screens. Each screen is identified by its stable display UUID (`CGDisplayCreateUUIDFromDisplayID`), its frame in points, and its pixel size. The localized name is stored for the menu, but it does not affect which layout is used. Screen order does not matter.
+A display setup is the set of connected screens. Each screen is identified by its EDID vendor, product, and serial when the display reports them. The UUID from `CGDisplayCreateUUIDFromDisplayID` is only a fallback, because it can change across a reboot. Pixel size and scaled point size are part of the key, so a resolution change is a different setup. The frame origin is not: it moves when the primary display or menu bar changes, and a dock replug often shifts it by a point. `CGDirectDisplayID` is never used. The localized name is stored for the menu and does not affect the key. Screen order does not matter.
 
 There is one layout per setup, written as JSON under:
 
@@ -14,15 +14,15 @@ There is one layout per setup, written as JSON under:
 
 Each file includes a version, the configuration key, the time it was saved, the displays, and the windows (bundle identifier, title, per-app window index, and frame).
 
-Window frames are stored in Cocoa coordinates (origin at the bottom-left of the primary display). Accessibility coordinates (origin at the top-left) are converted with the primary display's height.
+Window frames are stored in Cocoa coordinates (origin at the bottom-left of the primary display). Accessibility coordinates (origin at the top-left) are converted with the primary display's height. On restore, a frame is shifted onto the same physical display when that display's origin has moved.
 
 ## Behavior
 
-- **Store Windows Now** and **Restore Windows Now** read and move standard windows. Panels, sheets, and menus are skipped. A window that cannot be moved does not stop the rest. A fullscreen window leaves fullscreen before its frame is set.
-- **Auto-restore** is on by default. Window Minder restores the matching layout when displays are connected or disconnected, and shortly after the Mac wakes so windows exist again. If nothing is saved for that setup, the windows stay where they are.
-- **Save before a display change** is on by default. The app keeps an in-memory snapshot while the setup is stable. The screen notification arrives after the change, so that earlier snapshot is what gets saved for the previous setup.
+- **Store Windows Now** and **Restore Windows Now** read and move standard windows. Panels, sheets, and menus are skipped. Restore matches bundle id and title, then window index. It does not use the process id or the Accessibility window id, because those change after a restart. A window that cannot be moved does not stop the rest, and an app that is not running yet does not fail the restore. A fullscreen window leaves fullscreen before its frame is set.
+- **Auto-restore** is on by default. After login, after wake, and when displays are connected or disconnected (including a dock), Window Minder waits about a second and a half so a burst of display events becomes one restore, then applies the saved layout for that set of screens. The same monitors match the same layout after a replug. Apps that are not running yet are retried for about 15 seconds. Window Minder does not launch them. If nothing is saved for that setup, the windows stay where they are.
+- **Save before a display change** is on by default. The app keeps an in-memory snapshot while the setup is stable. The screen notification arrives after the change, so that earlier snapshot is what gets saved for the previous setup. A snapshot with no windows does not replace a saved layout that still has windows.
 - **Periodic auto-save** is off by default. Turn it on to write the current layout every 2 minutes.
-- **Launch at Login** uses `SMAppService.mainApp`. Before the first registration, status is `.notFound`. The menu shows that as an unchecked **Launch at Login**, including when the app is in `~/Applications`. An error is shown only if `register()` fails.
+- **Launch at Login** uses `SMAppService.mainApp` and is registered on first launch. Before that call, status is `.notFound`, which is not an error. The menu toggle can turn it off; `.notRegistered` stays off. The app can live in `/Applications` or `~/Applications`. An error is shown only if `register()` fails.
 - **Ignored apps** are left alone. Window Minder always ignores itself. You can ignore the frontmost app and remove apps later.
 - **Shortcuts** default to Control-Option-Command-S (store) and Control-Option-Command-R (restore). They are registered with Carbon so they work when another app is focused. The key code and modifiers are saved. If registration fails, Preferences says so.
 

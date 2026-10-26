@@ -1,16 +1,21 @@
 import AppKit
 import CoreGraphics
 
-/// Reads the connected screens. The configuration key uses the display UUID from
-/// CGDisplayCreateUUIDFromDisplayID, never the transient CGDirectDisplayID.
+/// Reads the connected screens. The configuration key prefers the EDID vendor,
+/// product, and serial. `CGDisplayCreateUUIDFromDisplayID` is only a fallback, and
+/// `CGDirectDisplayID` is never stored.
 @MainActor
 struct DisplayCatalog {
     func current() -> DisplayConfiguration {
         var displays: [DisplayDescriptor] = []
         for screen in NSScreen.screens {
-            guard let displayID = displayID(for: screen),
-                  let uuid = uuidString(for: displayID)
-            else { continue }
+            guard let displayID = displayID(for: screen) else { continue }
+            let vendor = CGDisplayVendorNumber(displayID)
+            let product = CGDisplayModelNumber(displayID)
+            let serial = CGDisplaySerialNumber(displayID)
+            let uuid = uuidString(for: displayID) ?? ""
+            let hasEDID = vendor != 0 && product != 0
+            if uuid.isEmpty && !hasEDID { continue }
             let frame = screen.frame
             let name = screen.localizedName.trimmingCharacters(in: .whitespacesAndNewlines)
             displays.append(
@@ -24,7 +29,10 @@ struct DisplayCatalog {
                     ),
                     pixelWidth: Int(CGDisplayPixelsWide(displayID)),
                     pixelHeight: Int(CGDisplayPixelsHigh(displayID)),
-                    name: name.isEmpty ? nil : name
+                    name: name.isEmpty ? nil : name,
+                    vendorID: hasEDID ? vendor : nil,
+                    productID: hasEDID ? product : nil,
+                    serialNumber: hasEDID ? serial : nil
                 )
             )
         }
@@ -95,5 +103,45 @@ struct DisplayCatalog {
 
     private func uuidText(_ value: Unmanaged<CFString>) -> String {
         value.takeRetainedValue() as String
+    }
+}
+
+/// Forwards `CGDisplayRegisterReconfigurationCallback` onto the main actor.
+/// A dock connect or disconnect posts a burst of these; the coordinator debounces them.
+@MainActor
+final class DisplayReconfigurationMonitor {
+    static let shared = DisplayReconfigurationMonitor()
+    var onReconfigure: @MainActor () -> Void = {}
+    private var installed = false
+
+    func start() {
+        guard !installed else { return }
+        let pointer = Unmanaged.passUnretained(self).toOpaque()
+        let error = CGDisplayRegisterReconfigurationCallback({ display, flags, userInfo in
+            handleDisplayReconfiguration(display, flags, userInfo)
+        }, pointer)
+        guard error == .success else { return }
+        installed = true
+    }
+
+    fileprivate func fire() {
+        onReconfigure()
+    }
+}
+
+private func handleDisplayReconfiguration(
+    _ display: CGDirectDisplayID,
+    _ flags: CGDisplayChangeSummaryFlags,
+    _ userInfo: UnsafeMutableRawPointer?
+) {
+    _ = display
+    _ = flags
+    guard let userInfo else { return }
+    DispatchQueue.main.async {
+        let raw = userInfo
+        MainActor.assumeIsolated {
+            let monitor = Unmanaged<DisplayReconfigurationMonitor>.fromOpaque(raw).takeUnretainedValue()
+            monitor.fire()
+        }
     }
 }

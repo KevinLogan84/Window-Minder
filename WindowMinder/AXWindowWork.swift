@@ -21,6 +21,7 @@ struct AXCaptureReport: Sendable {
 struct AXRestoreReport: Sendable {
     var summary: RestoreSummary
     var elapsedMilliseconds: Int
+    var bundlesWithLiveWindows: [String]
 }
 
 /// Accessibility reads and writes. Each app element is used on one task.
@@ -112,10 +113,15 @@ enum AXWindowWork {
             unresponsiveAppCount: results.reduce(0) { $0 + ($1.timedOut ? 1 : 0) }
         )
         let elapsed = elapsedMilliseconds(since: started)
+        let bundlesWithLiveWindows = results.filter(\.sawWindows).map(\.bundleIdentifier).sorted()
         windowLogger.info(
             "Restore elapsedMs=\(elapsed, privacy: .public) appsScanned=\(targets.count, privacy: .public) appsTimedOut=\(summary.unresponsiveAppCount, privacy: .public) restored=\(summary.restored, privacy: .public) skipped=\(summary.skipped, privacy: .public) failed=\(summary.failed, privacy: .public)"
         )
-        return AXRestoreReport(summary: summary, elapsedMilliseconds: elapsed)
+        return AXRestoreReport(
+            summary: summary,
+            elapsedMilliseconds: elapsed,
+            bundlesWithLiveWindows: bundlesWithLiveWindows
+        )
     }
 
     private struct AppCapture: Sendable {
@@ -124,10 +130,12 @@ enum AXWindowWork {
     }
 
     private struct AppRestore: Sendable {
+        var bundleIdentifier: String
         var restored: Int
         var skipped: Int
         var failed: Int
         var timedOut: Bool
+        var sawWindows: Bool
     }
 
     private static func captureApp(_ target: ScanCandidate, primaryHeight: Double) -> AppCapture {
@@ -175,11 +183,18 @@ enum AXWindowWork {
                 "Accessibility timed out bundle=\(target.bundleIdentifier, privacy: .public) pid=\(target.processIdentifier, privacy: .public)"
             )
             let skipped = savedForApp.filter { !ignoredBundleIdentifiers.contains($0.bundleIdentifier) }.count
-            return AppRestore(restored: 0, skipped: skipped, failed: 0, timedOut: true)
+            return AppRestore(
+                bundleIdentifier: target.bundleIdentifier,
+                restored: 0,
+                skipped: skipped,
+                failed: 0,
+                timedOut: true,
+                sawWindows: false
+            )
         case .windows(let elements):
             let attributes = elements.map(copyWindowAttributes)
             let classified = WindowCaptureRules.classify(attributes)
-            var live: [(record: WindowRecord, element: AXUIElement, fullscreen: Bool)] = []
+            var live: [(window: LiveWindow, element: AXUIElement, fullscreen: Bool)] = []
             for (offset, item) in classified.enumerated() where item.includeInRestore {
                 guard let index = item.windowIndex, offset < elements.count else { continue }
                 let frame = item.attributes.frame ?? WMRect(x: 0, y: 0, width: 0, height: 0)
@@ -191,11 +206,17 @@ enum AXWindowWork {
                     frame: cocoa,
                     minimized: item.attributes.minimized
                 )
-                live.append((record, elements[offset], item.attributes.fullscreen))
+                let window = LiveWindow(
+                    record: record,
+                    processIdentifier: target.processIdentifier,
+                    role: item.attributes.role,
+                    subrole: item.attributes.subrole
+                )
+                live.append((window: window, element: elements[offset], fullscreen: item.attributes.fullscreen))
             }
             let matches = WindowMatcher.match(
                 saved: savedForApp,
-                live: live.map(\.record),
+                live: live.map(\.window),
                 ignoredBundleIdentifiers: ignoredBundleIdentifiers
             )
             var pool = live
@@ -204,10 +225,10 @@ enum AXWindowWork {
             var skipped = 0
             for match in matches {
                 guard let found = pool.firstIndex(where: { candidate in
-                    candidate.record.bundleIdentifier == match.live.bundleIdentifier
-                        && candidate.record.windowIndex == match.live.windowIndex
-                        && candidate.record.windowTitle == match.live.windowTitle
-                        && candidate.record.minimized == match.live.minimized
+                    candidate.window.record.bundleIdentifier == match.live.bundleIdentifier
+                        && candidate.window.record.windowIndex == match.live.windowIndex
+                        && candidate.window.record.windowTitle == match.live.windowTitle
+                        && candidate.window.record.minimized == match.live.minimized
                 }) else {
                     failed += 1
                     continue
@@ -240,7 +261,14 @@ enum AXWindowWork {
             }
             let eligible = savedForApp.filter { !ignoredBundleIdentifiers.contains($0.bundleIdentifier) }.count
             skipped += max(eligible - matches.count, 0)
-            return AppRestore(restored: restored, skipped: skipped, failed: failed, timedOut: false)
+            return AppRestore(
+                bundleIdentifier: target.bundleIdentifier,
+                restored: restored,
+                skipped: skipped,
+                failed: failed,
+                timedOut: false,
+                sawWindows: !live.isEmpty
+            )
         }
     }
 

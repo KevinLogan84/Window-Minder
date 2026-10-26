@@ -83,6 +83,7 @@ final class AppModel {
     func start() {
         guard !didStart else { return }
         didStart = true
+        registerLoginItemOnFirstLaunch()
         let directory = LayoutLocation.layoutsDirectory(
             homeDirectory: FileManager.default.homeDirectoryForCurrentUser
         )
@@ -174,6 +175,9 @@ final class AppModel {
         }
         updateTrustPolling()
         if changed {
+            if trusted {
+                coordinator?.accessibilityWasGranted()
+            }
             onAccessibilityTrustChange?()
         }
     }
@@ -455,8 +459,30 @@ final class AppModel {
         accessibilityLogger.info("Trust poll stopped")
     }
 
+    private func registerLoginItemOnFirstLaunch() {
+        let state = loginItems.state()
+        guard LoginItemRegistration.shouldRegisterOnLaunch(state) else {
+            loginState = state
+            return
+        }
+        do {
+            loginState = try loginItems.registerIfNeeded()
+            loginMessage = LoginItemPresentation.message(for: loginState)
+        } catch {
+            loginState = loginItems.state()
+            loginMessage = LoginItemPresentation.registrationFailureMessage(
+                errorDescription: error.localizedDescription,
+                bundlePath: Bundle.main.bundlePath,
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            )
+        }
+    }
+
     private func reloadLayouts() {
-        let nextKey = displays.currentKey()
+        let configuration = displays.current()
+        let loaded = coordinator.flatMap { try? $0.savedLayouts() } ?? []
+        let nextKey = LayoutCatalog.layout(for: configuration, in: loaded)?.key
+            ?? (configuration.displays.isEmpty ? nil : configuration.key)
         if currentConfigurationKey != nextKey {
             currentConfigurationKey = nextKey
         }
@@ -464,7 +490,6 @@ final class AppModel {
         if displaySummary != summary {
             displaySummary = summary
         }
-        let loaded = coordinator.flatMap { try? $0.savedLayouts() } ?? []
         var seen = Set<String>()
         let sorted = loaded.sorted { lhs, rhs in
             let leftIsCurrent = lhs.key == currentConfigurationKey

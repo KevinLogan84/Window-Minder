@@ -280,6 +280,30 @@ public enum StoreOutcome: Equatable, Sendable {
     }
 }
 
+public enum SnapshotMerge {
+    /// Live windows replace saved windows for apps that are on screen.
+    /// An app with no live window keeps its saved record, so a snapshot taken
+    /// before that app launches does not forget it.
+    public static func merging(saved: [WindowRecord], captured: [WindowRecord]) -> [WindowRecord] {
+        let liveBundles = Set(captured.map(\.bundleIdentifier))
+        let kept = saved.filter { record in
+            !record.bundleIdentifier.isEmpty && !liveBundles.contains(record.bundleIdentifier)
+        }
+        return captured + kept
+    }
+}
+
+public enum LayoutOverwrite {
+    /// An automatic capture with no windows must not erase a layout that still has windows.
+    /// That capture is what a login produces before the other apps have opened their windows.
+    /// An explicit Store can still write an empty layout.
+    public static func shouldReplaceSavedLayout(existingWindowCount: Int?, capturedWindowCount: Int) -> Bool {
+        if capturedWindowCount > 0 { return true }
+        guard let existingWindowCount else { return true }
+        return existingWindowCount == 0
+    }
+}
+
 public struct RestoreSummary: Equatable, Sendable {
     public var restored: Int
     public var skipped: Int

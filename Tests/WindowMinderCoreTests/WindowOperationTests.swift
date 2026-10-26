@@ -133,6 +133,46 @@ final class WindowOperationTests: XCTestCase {
         XCTAssertEqual(quietDesk.message, "Stored 0 windows from 0 apps")
     }
 
+    func testSnapshotKeepsWindowsForAppsThatAreNotRunningYet() {
+        let saved = [
+            WindowRecord(
+                bundleIdentifier: "com.apple.finder",
+                windowTitle: "Documents",
+                windowIndex: 0,
+                frame: WMRect(x: 1, y: 2, width: 3, height: 4)
+            ),
+            WindowRecord(
+                bundleIdentifier: "com.apple.Safari",
+                windowTitle: "Start Page",
+                windowIndex: 0,
+                frame: WMRect(x: 5, y: 6, width: 7, height: 8)
+            ),
+        ]
+        let captured = [
+            WindowRecord(
+                bundleIdentifier: "com.apple.finder",
+                windowTitle: "Documents",
+                windowIndex: 0,
+                frame: WMRect(x: 9, y: 9, width: 9, height: 9)
+            ),
+        ]
+        let merged = SnapshotMerge.merging(saved: saved, captured: captured)
+        XCTAssertEqual(merged.map(\.bundleIdentifier).sorted(), ["com.apple.Safari", "com.apple.finder"])
+        XCTAssertEqual(merged.first { $0.bundleIdentifier == "com.apple.finder" }?.frame.x, 9)
+        XCTAssertEqual(merged.first { $0.bundleIdentifier == "com.apple.Safari" }?.frame.x, 5)
+        XCTAssertEqual(SnapshotMerge.merging(saved: saved, captured: []).map(\.bundleIdentifier).sorted(), [
+            "com.apple.Safari",
+            "com.apple.finder",
+        ])
+    }
+
+    func testEmptyAutomaticCaptureDoesNotEraseASavedLayout() {
+        XCTAssertFalse(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 4, capturedWindowCount: 0))
+        XCTAssertTrue(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 4, capturedWindowCount: 2))
+        XCTAssertTrue(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: nil, capturedWindowCount: 0))
+        XCTAssertTrue(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 0, capturedWindowCount: 0))
+    }
+
     func testRestoreSummaryCounts() {
         XCTAssertEqual(
             RestoreSummary(restored: 12, skipped: 0, failed: 0, unresponsiveAppCount: 0).message,

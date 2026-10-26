@@ -1,5 +1,14 @@
 import Foundation
 
+public enum LoginItemRegistration {
+    /// `.notFound` is what `SMAppService` reports before the first `register()`.
+    /// That is the moment to turn Launch at Login on. `.notRegistered` means the user
+    /// turned it off later, and it stays off.
+    public static func shouldRegisterOnLaunch(_ state: LoginItemState) -> Bool {
+        state == .notFound
+    }
+}
+
 public enum LoginItemState: Equatable, Sendable {
     case enabled
     case notRegistered

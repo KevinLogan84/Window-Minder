@@ -101,6 +101,14 @@ final class AppStatusTests: XCTestCase {
         XCTAssertTrue(AccessibilityTrustPolling.menuAllowsWindowActions(isTrusted: true))
     }
 
+    func testFirstLaunchRegistersOnlyWhenTheServiceWasNeverRegistered() {
+        XCTAssertTrue(LoginItemRegistration.shouldRegisterOnLaunch(.notFound))
+        XCTAssertFalse(LoginItemRegistration.shouldRegisterOnLaunch(.notRegistered))
+        XCTAssertFalse(LoginItemRegistration.shouldRegisterOnLaunch(.enabled))
+        XCTAssertFalse(LoginItemRegistration.shouldRegisterOnLaunch(.requiresApproval))
+        XCTAssertFalse(LoginItemRegistration.shouldRegisterOnLaunch(.unknown))
+    }
+
     func testNotFoundIsUncheckedLaunchAtLogin() {
         XCTAssertEqual(LoginItemPresentation.title(for: .notFound), "Launch at Login")
         XCTAssertFalse(LoginItemPresentation.isEnabled(.notFound))

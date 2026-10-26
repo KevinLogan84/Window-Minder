@@ -147,6 +147,109 @@ final class LayoutStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent("alpha.json").path))
     }
 
+    func testDiskRoundTripKeepsTheLayoutWhenOriginsAndUUIDChange() throws {
+        let savedDisplay = DisplayDescriptor(
+            uuid: "OLD-UUID",
+            frame: WMRect(x: -2560, y: -229, width: 2560, height: 1440),
+            pixelWidth: 3840,
+            pixelHeight: 2160,
+            name: "LU28R55"
+        )
+        let legacy = SavedLayout(
+            version: SavedLayout.currentVersion,
+            key: "legacy-origin-key",
+            savedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            displays: [savedDisplay],
+            windows: [
+                WindowRecord(
+                    bundleIdentifier: "com.apple.finder",
+                    windowTitle: "Documents",
+                    windowIndex: 0,
+                    frame: WMRect(x: -2400, y: -100, width: 800, height: 600)
+                ),
+            ]
+        )
+        try store.save(legacy)
+        let loadedLegacy = try XCTUnwrap(try store.load(key: "legacy-origin-key"))
+        XCTAssertEqual(loadedLegacy.windows, legacy.windows)
+        XCTAssertNil(loadedLegacy.displays.first?.vendorID)
+
+        let currentDisplay = DisplayDescriptor(
+            uuid: "NEW-UUID",
+            frame: WMRect(x: 1, y: -2, width: 2560, height: 1440),
+            pixelWidth: 3840,
+            pixelHeight: 2160,
+            name: "LU28R55",
+            vendorID: 4268,
+            productID: 16823,
+            serialNumber: 99
+        )
+        let current = DisplayConfiguration(displays: [currentDisplay])
+        XCTAssertNotEqual(current.key, legacy.key)
+        let chosen = LayoutCatalog.layout(for: current, in: try store.list())
+        XCTAssertEqual(chosen?.windows.first?.windowTitle, "Documents")
+
+        let exact = SavedLayout(
+            version: SavedLayout.currentVersion,
+            key: current.key,
+            savedAt: Date(timeIntervalSince1970: 1_700_000_500),
+            displays: [currentDisplay],
+            windows: [
+                WindowRecord(
+                    bundleIdentifier: "com.apple.Safari",
+                    windowTitle: "Start Page",
+                    windowIndex: 0,
+                    frame: WMRect(x: 40, y: 50, width: 900, height: 700)
+                ),
+            ]
+        )
+        try store.save(exact)
+        let roundTrip = try XCTUnwrap(try store.load(key: current.key))
+        XCTAssertEqual(roundTrip.displays.first?.vendorID, 4268)
+        XCTAssertEqual(roundTrip.displays.first?.productID, 16823)
+        XCTAssertEqual(roundTrip.displays.first?.serialNumber, 99)
+        XCTAssertEqual(roundTrip.windows.first?.windowTitle, "Start Page")
+        let jittered = DisplayConfiguration(displays: [
+            DisplayDescriptor(
+                uuid: "YET-ANOTHER-UUID",
+                frame: WMRect(x: 12, y: 40, width: 2560, height: 1440),
+                pixelWidth: 3840,
+                pixelHeight: 2160,
+                vendorID: 4268,
+                productID: 16823,
+                serialNumber: 99
+            ),
+        ])
+        XCTAssertEqual(jittered.key, current.key)
+        XCTAssertEqual(LayoutCatalog.layout(for: jittered, in: try store.list())?.key, current.key)
+    }
+
+    func testLayoutSavedBeforeEDIDStillDecodes() throws {
+        let json = """
+        {
+          "displays": [
+            {
+              "frame": {"height": 900, "width": 1440, "x": 0, "y": 0},
+              "name": "Built-in",
+              "pixelHeight": 1800,
+              "pixelWidth": 2880,
+              "uuid": "UUID-A"
+            }
+          ],
+          "key": "alpha",
+          "savedAt": "2023-11-14T22:13:20Z",
+          "version": 1,
+          "windows": []
+        }
+        """
+        try Data(json.utf8).write(to: directory.appendingPathComponent("alpha.json"))
+        let loaded = try XCTUnwrap(try store.load(key: "alpha"))
+        XCTAssertNil(loaded.displays.first?.vendorID)
+        XCTAssertNil(loaded.displays.first?.productID)
+        XCTAssertNil(loaded.displays.first?.serialNumber)
+        XCTAssertEqual(loaded.displays.first?.uuid, "UUID-A")
+    }
+
     func testLayoutsDirectoryPath() {
         let home = URL(fileURLWithPath: "/Users/example", isDirectory: true)
         let url = LayoutLocation.layoutsDirectory(homeDirectory: home)
