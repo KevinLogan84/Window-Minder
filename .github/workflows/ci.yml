@@ -7,7 +7,10 @@ on:
 jobs:
   test:
     name: xcodebuild test
-    runs-on: macos-15
+    # macos-26 is the current macos-latest image. Its newest stable Xcode is 26.6
+    # (macosx26.5). macos-15 stops at Xcode 26.3, whose actool closes the
+    # AssetCatalogAgent connection while compiling AppIcon.icon.
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - name: Check out
