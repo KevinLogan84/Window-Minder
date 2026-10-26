@@ -342,7 +342,7 @@ final class LayoutCoordinator {
             }
         })
         observers.append(DistributedNotificationCenter.default().addObserver(
-            forName: screenIsUnlocked,
+            forName: Self.screenIsUnlocked,
             object: nil,
             queue: .main
         ) { [weak self] _ in
