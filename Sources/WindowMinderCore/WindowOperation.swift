@@ -240,12 +240,14 @@ public struct StoreSummary: Equatable, Sendable {
 public enum StoreOutcome: Equatable, Sendable {
     case saved(StoreSummary)
     case allUnresponsive(appCount: Int)
+    /// A 0-window capture must not replace a layout that still has windows.
+    case keptExistingLayout(existingWindowCount: Int)
 
     public var shouldSave: Bool {
         switch self {
         case .saved:
             return true
-        case .allUnresponsive:
+        case .allUnresponsive, .keptExistingLayout:
             return false
         }
     }
@@ -257,16 +259,23 @@ public enum StoreOutcome: Equatable, Sendable {
         case .allUnresponsive(let count):
             let apps = CountNoun.phrase(count, singular: "app", plural: "apps")
             return "Could not store windows. \(apps) did not respond"
+        case .keptExistingLayout:
+            return "No windows could be read. The saved layout was left unchanged."
         }
     }
 
-    /// An empty result only replaces a layout when at least one app answered.
+    /// An empty result only replaces a layout when at least one app answered
+    /// and there is no existing layout that still has windows.
     public static func make(
         windowCount: Int,
         appCount: Int,
         appsScanned: Int,
-        appsTimedOut: Int
+        appsTimedOut: Int,
+        existingWindowCount: Int? = nil
     ) -> StoreOutcome {
+        if windowCount == 0, let existingWindowCount, existingWindowCount > 0 {
+            return .keptExistingLayout(existingWindowCount: existingWindowCount)
+        }
         if windowCount == 0, appsScanned > 0, appsTimedOut == appsScanned {
             return .allUnresponsive(appCount: appsTimedOut)
         }
@@ -294,9 +303,9 @@ public enum SnapshotMerge {
 }
 
 public enum LayoutOverwrite {
-    /// An automatic capture with no windows must not erase a layout that still has windows.
-    /// That capture is what a login produces before the other apps have opened their windows.
-    /// An explicit Store can still write an empty layout.
+    /// A capture with no windows must not erase a layout that still has windows.
+    /// That includes an explicit Store: a failed Accessibility read looks like zero windows
+    /// and would replace a real layout. A missing layout, or one that is already empty, can be replaced.
     public static func shouldReplaceSavedLayout(existingWindowCount: Int?, capturedWindowCount: Int) -> Bool {
         if capturedWindowCount > 0 { return true }
         guard let existingWindowCount else { return true }

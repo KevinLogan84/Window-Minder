@@ -126,13 +126,40 @@ final class LayoutCoordinator {
         let targets = accessibility.scanTargets(ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers)
         let report = await AXWindowWork.capture(targets: targets, primaryHeight: height, trace: .store)
         let appCount = Set(report.windows.map(\.bundleIdentifier)).count
+        let existingCount: Int?
+        do {
+            existingCount = try savedWindowCount(for: configuration)
+        } catch {
+            layoutLogger.error(
+                "Could not read saved layouts before store: \(error.localizedDescription, privacy: .public)"
+            )
+            if report.windows.isEmpty {
+                return "No windows could be read. The saved layout was left unchanged."
+            }
+            existingCount = nil
+        }
         let outcome = StoreOutcome.make(
             windowCount: report.windows.count,
             appCount: appCount,
             appsScanned: report.appsScanned,
-            appsTimedOut: report.appsTimedOut
+            appsTimedOut: report.appsTimedOut,
+            existingWindowCount: existingCount
         )
-        guard outcome.shouldSave else { return outcome.message }
+        if case .keptExistingLayout(let existing) = outcome {
+            layoutLogger.error(
+                "Refused empty store existingWindows=\(existing, privacy: .public) appsScanned=\(report.appsScanned, privacy: .public) appsTimedOut=\(report.appsTimedOut, privacy: .public) captured=\(report.windows.count, privacy: .public)"
+            )
+            return outcome.message
+        }
+        guard outcome.shouldSave else {
+            layoutLogger.error(
+                "Store skipped appsScanned=\(report.appsScanned, privacy: .public) appsTimedOut=\(report.appsTimedOut, privacy: .public) windows=\(report.windows.count, privacy: .public)"
+            )
+            return outcome.message
+        }
+        layoutLogger.info(
+            "Store windows=\(report.windows.count, privacy: .public) apps=\(appCount, privacy: .public) appsScanned=\(report.appsScanned, privacy: .public) appsTimedOut=\(report.appsTimedOut, privacy: .public)"
+        )
         let layout = SavedLayout(
             version: SavedLayout.currentVersion,
             key: configuration.key,
@@ -151,6 +178,13 @@ final class LayoutCoordinator {
         }
         onLayoutsChanged()
         return outcome.message
+    }
+
+    /// Windows already saved for this display setup, including a legacy file whose key
+    /// no longer matches. Nil when nothing is saved. Throws only if the folder cannot be read.
+    private func savedWindowCount(for configuration: DisplayConfiguration) throws -> Int? {
+        let layouts = try store.list()
+        return LayoutCatalog.layout(for: configuration, in: layouts)?.windows.count
     }
 
     /// `announceWhenIdle` is for an explicit Restore. Automatic restore stays quiet when

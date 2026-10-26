@@ -38,10 +38,11 @@ final class AppStatusTests: XCTestCase {
             processTrusted: false,
             probeError: AccessibilityAPIErrorCode.apiDisabled
         ))
-        XCTAssertTrue(AccessibilityTrustDecision.isTrusted(
+        XCTAssertFalse(AccessibilityTrustDecision.isTrusted(
             processTrusted: true,
             probeError: AccessibilityAPIErrorCode.apiDisabled
         ))
+        XCTAssertEqual(AccessibilityAPIErrorCode.cannotComplete, -25204)
         XCTAssertEqual(
             AccessibilityTrustDecision.logLine(
                 source: .poll,
@@ -63,6 +64,91 @@ final class AppStatusTests: XCTestCase {
             "noValue(-25212)"
         )
         XCTAssertEqual(AccessibilityTrustDecision.probeDescription(-25200), "other(-25200)")
+        XCTAssertEqual(
+            AccessibilityTrustDecision.logLine(
+                source: .action,
+                processTrusted: true,
+                probeError: AccessibilityAPIErrorCode.apiDisabled
+            ),
+            "Trust check source=action AXIsProcessTrusted=true probe=apiDisabled(-25211) trusted=false"
+        )
+    }
+
+    func testWindowProbeDecidesTrustWhenAppsHaveWindows() {
+        XCTAssertFalse(AccessibilityTrustDecision.isEffective(
+            processTrusted: true,
+            probeError: AccessibilityAPIErrorCode.success,
+            onscreenAppsWithWindows: 2,
+            axWindowCount: 0,
+            axReadFailed: false
+        ))
+        XCTAssertFalse(AccessibilityTrustDecision.isEffective(
+            processTrusted: true,
+            probeError: AccessibilityAPIErrorCode.success,
+            onscreenAppsWithWindows: 1,
+            axWindowCount: 0,
+            axReadFailed: true
+        ))
+        XCTAssertFalse(AccessibilityTrustDecision.isEffective(
+            processTrusted: true,
+            probeError: AccessibilityAPIErrorCode.apiDisabled,
+            onscreenAppsWithWindows: 3,
+            axWindowCount: 0,
+            axReadFailed: true
+        ))
+        XCTAssertTrue(AccessibilityTrustDecision.isEffective(
+            processTrusted: false,
+            probeError: AccessibilityAPIErrorCode.apiDisabled,
+            onscreenAppsWithWindows: 1,
+            axWindowCount: 4,
+            axReadFailed: false
+        ))
+        XCTAssertTrue(AccessibilityTrustDecision.isEffective(
+            processTrusted: false,
+            probeError: AccessibilityAPIErrorCode.success,
+            onscreenAppsWithWindows: 2,
+            axWindowCount: 1,
+            axReadFailed: true
+        ))
+        XCTAssertFalse(AccessibilityTrustDecision.isEffective(
+            processTrusted: true,
+            probeError: AccessibilityAPIErrorCode.apiDisabled,
+            onscreenAppsWithWindows: 0,
+            axWindowCount: 0,
+            axReadFailed: false
+        ))
+        XCTAssertTrue(AccessibilityTrustDecision.isEffective(
+            processTrusted: false,
+            probeError: AccessibilityAPIErrorCode.success,
+            onscreenAppsWithWindows: 0,
+            axWindowCount: 0,
+            axReadFailed: false
+        ))
+        XCTAssertTrue(AccessibilityTrustDecision.isEffective(
+            processTrusted: false,
+            probeError: AccessibilityAPIErrorCode.noValue,
+            onscreenAppsWithWindows: 0,
+            axWindowCount: 0,
+            axReadFailed: false
+        ))
+        XCTAssertTrue(AccessibilityTrustDecision.isEffective(
+            processTrusted: true,
+            probeError: AccessibilityAPIErrorCode.cannotComplete,
+            onscreenAppsWithWindows: 2,
+            axWindowCount: 0,
+            axReadFailed: false
+        ))
+        XCTAssertFalse(AccessibilityTrustDecision.isEffective(
+            processTrusted: true,
+            probeError: AccessibilityAPIErrorCode.cannotComplete,
+            onscreenAppsWithWindows: 2,
+            axWindowCount: 0,
+            axReadFailed: true
+        ))
+        XCTAssertEqual(
+            AccessibilityMenuCopy.accessNeeded,
+            "Accessibility access needed. Open Settings…"
+        )
     }
 
     func testProbePrefersAResultThatIsNotAPIDisabled() {

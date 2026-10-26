@@ -348,7 +348,12 @@ enum AXWindowWork {
         if error == .cannotComplete {
             return .timedOut
         }
-        guard error == .success, let value else { return .windows([]) }
+        guard error == .success, let value else {
+            windowLogger.error(
+                "AX windows copy failed error=\(error.rawValue, privacy: .public)"
+            )
+            return .windows([])
+        }
         return .windows(elements(from: value))
     }
 

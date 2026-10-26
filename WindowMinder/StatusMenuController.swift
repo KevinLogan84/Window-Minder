@@ -4,7 +4,7 @@ import Observation
 /// Menu-bar menu rebuilt on every open.
 ///
 /// `MenuBarExtra` with the `.menu` style snapshots its content into an `NSMenu`
-/// and was keeping "Accessibility Access Not Granted" after trust flipped.
+/// and was keeping a stale Accessibility warning after trust flipped.
 /// `menuNeedsUpdate` reads the model and builds the items again.
 @MainActor
 final class StatusMenuController: NSObject, NSMenuDelegate {
@@ -75,8 +75,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             && !model.isWindowOperationRunning
 
         if AccessibilityTrustPolling.showsAccessDenied(isTrusted: model.accessibilityTrusted) {
-            menu.addItem(label("Accessibility Access Not Granted"))
-            menu.addItem(actionItem("Open Accessibility Settings…", action: #selector(openAccessibilitySettings(_:))))
+            menu.addItem(actionItem(
+                AccessibilityMenuCopy.accessNeeded,
+                action: #selector(openAccessibilitySettings(_:))
+            ))
             menu.addItem(.separator())
         }
 

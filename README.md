@@ -30,13 +30,15 @@ Window frames are stored in Cocoa coordinates (origin at the bottom-left of the 
 
 Window Minder prompts for Accessibility access on launch with `AXIsProcessTrustedWithOptions` and `kAXTrustedCheckOptionPrompt`.
 
-If access is not granted, the menu says so and includes **Open Accessibility Settings…**, which opens:
+If access is not actually working, the menu shows **Accessibility access needed. Open Settings…**, which opens:
 
 System Settings > Privacy & Security > Accessibility
 
-Enable Window Minder there. Nothing is stored or restored until that permission is on.
+Enable Window Minder there. Nothing is stored or restored until a live read succeeds. An ad-hoc rebuild changes the cdhash, so a previous Accessibility row can stay listed while `tccd` rejects the new binary.
 
-`AXIsProcessTrusted` can stay cached for the life of the process, so a grant is also checked with a live Accessibility call (`AXUIElementCopyAttributeValue` on the system-wide element). API disabled means not granted. Any other result, or a cached `true` from `AXIsProcessTrusted`, counts as granted. The menu rechecks about once a second until then, including while the menu is open, and also when the menu opens, when the app becomes active, when another app becomes frontmost, and when macOS posts `com.apple.accessibility.api` (immediately, then again after half a second and two seconds). Each check is logged to Console under subsystem `com.kevinlogan.WindowMinder` and category `accessibility`. Store and Restore turn on as soon as a check succeeds, without relaunching. Polling stops once access is granted.
+`AXIsProcessTrusted` can stay cached `true` for the life of the process, and that cache is not treated as a grant. Window Minder copies the window list of running apps that already have on-screen windows. If that call fails, or it returns no windows, the menu warning stays up. If it returns windows, Store and Restore turn on without relaunching, even when the cached flag is still false. When no app has an on-screen window, a live attribute copy decides, and API disabled still means not granted. The menu rechecks about once a second until then, including while the menu is open, and also when the menu opens, when the app becomes active, when another app becomes frontmost, and when macOS posts `com.apple.accessibility.api` (immediately, then again after half a second and two seconds). Each check is logged to Console under subsystem `com.kevinlogan.WindowMinder` and category `accessibility`. Store and restore counts, and Accessibility errors, are logged under the same subsystem. Polling stops once a live read succeeds.
+
+A Store that reads zero windows does not replace a saved layout that still has windows. The previous file is left untouched and the menu says so.
 
 ## Build and test
 

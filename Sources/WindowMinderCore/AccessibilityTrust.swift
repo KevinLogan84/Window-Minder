@@ -58,14 +58,55 @@ public enum AccessibilityAPIErrorCode {
     public static let success: Int32 = 0
     public static let apiDisabled: Int32 = -25211
     public static let noValue: Int32 = -25212
+    /// `kAXErrorCannotComplete`. A short probe treats this as a timeout.
+    public static let cannotComplete: Int32 = -25204
 }
 
-/// `AXIsProcessTrusted` can stay cached for the life of the process.
-/// A live attribute copy is trusted unless it returns API disabled.
-/// Either signal is enough.
+/// Menu item shown when a live Accessibility read is not actually working.
+/// Opens the Accessibility pane.
+public enum AccessibilityMenuCopy {
+    public static let accessNeeded = "Accessibility access needed. Open Settings…"
+}
+
+/// `AXIsProcessTrusted` can stay cached for the life of the process, and a stale
+/// TCC grant keeps that cache `true` after an ad-hoc rebuild changes the cdhash.
+/// A live read that returns API disabled is not trusted, even when the cache is true.
+/// Any other probe result counts as trusted so a real grant shows up without relaunch.
 public enum AccessibilityTrustDecision {
+    /// Cached process trust cannot override API disabled.
+    /// `processTrusted` is recorded in the log line and is not itself a grant.
     public static func isTrusted(processTrusted: Bool, probeError: Int32) -> Bool {
-        processTrusted || probeError != AccessibilityAPIErrorCode.apiDisabled
+        _ = processTrusted
+        return probeError != AccessibilityAPIErrorCode.apiDisabled
+    }
+
+    /// Running apps that already have on-screen windows are the real check.
+    /// If an AX read of those apps fails, or succeeds and returns no windows,
+    /// Accessibility is not effective. Windows from that read count as effective
+    /// even when `AXIsProcessTrusted` is still false.
+    /// When nothing on screen has a window, the attribute probe decides.
+    public static func isEffective(
+        processTrusted: Bool,
+        probeError: Int32,
+        onscreenAppsWithWindows: Int,
+        axWindowCount: Int,
+        axReadFailed: Bool
+    ) -> Bool {
+        if onscreenAppsWithWindows > 0 {
+            if axWindowCount > 0 {
+                return true
+            }
+            // A hard error, or a successful read that came back empty.
+            // A timeout (`cannotComplete`) is inconclusive and falls through.
+            if axReadFailed {
+                return false
+            }
+            if probeError == AccessibilityAPIErrorCode.success
+                || probeError == AccessibilityAPIErrorCode.noValue {
+                return false
+            }
+        }
+        return isTrusted(processTrusted: processTrusted, probeError: probeError)
     }
 
     /// Prefer any result that is not API disabled. An empty list fails closed.

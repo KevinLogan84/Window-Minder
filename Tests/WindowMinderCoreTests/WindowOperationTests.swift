@@ -133,6 +133,57 @@ final class WindowOperationTests: XCTestCase {
         XCTAssertEqual(quietDesk.message, "Stored 0 windows from 0 apps")
     }
 
+    func testEmptySaveDoesNotReplaceANonEmptyLayout() {
+        let blocked = StoreOutcome.make(
+            windowCount: 0,
+            appCount: 0,
+            appsScanned: 2,
+            appsTimedOut: 0,
+            existingWindowCount: 6
+        )
+        XCTAssertFalse(blocked.shouldSave)
+        XCTAssertFalse(blocked.message.hasPrefix("Stored "))
+        XCTAssertEqual(blocked.message, "No windows could be read. The saved layout was left unchanged.")
+
+        let timedOutOverLayout = StoreOutcome.make(
+            windowCount: 0,
+            appCount: 0,
+            appsScanned: 3,
+            appsTimedOut: 3,
+            existingWindowCount: 4
+        )
+        XCTAssertFalse(timedOutOverLayout.shouldSave)
+        XCTAssertEqual(timedOutOverLayout.message, "No windows could be read. The saved layout was left unchanged.")
+
+        let fresh = StoreOutcome.make(
+            windowCount: 0,
+            appCount: 0,
+            appsScanned: 2,
+            appsTimedOut: 0,
+            existingWindowCount: nil
+        )
+        XCTAssertTrue(fresh.shouldSave)
+
+        let replaceEmpty = StoreOutcome.make(
+            windowCount: 0,
+            appCount: 0,
+            appsScanned: 1,
+            appsTimedOut: 0,
+            existingWindowCount: 0
+        )
+        XCTAssertTrue(replaceEmpty.shouldSave)
+
+        let realWindows = StoreOutcome.make(
+            windowCount: 3,
+            appCount: 1,
+            appsScanned: 1,
+            appsTimedOut: 0,
+            existingWindowCount: 6
+        )
+        XCTAssertTrue(realWindows.shouldSave)
+        XCTAssertEqual(realWindows.message, "Stored 3 windows from 1 app")
+    }
+
     func testSnapshotKeepsWindowsForAppsThatAreNotRunningYet() {
         let saved = [
             WindowRecord(
