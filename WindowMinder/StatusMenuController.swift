@@ -33,22 +33,23 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
-        MainActor.assumeIsolated {
-            self.prepare(menu)
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
+            controller.prepare(menu)
         }
     }
 
     @objc nonisolated func menuWillOpen(_ menu: NSMenu) {
-        MainActor.assumeIsolated {
-            guard menu === self.menu else { return }
-            self.menuOpen = true
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self, menu === controller.menu else { return }
+            controller.menuOpen = true
         }
     }
 
     @objc nonisolated func menuDidClose(_ menu: NSMenu) {
-        MainActor.assumeIsolated {
-            guard menu === self.menu else { return }
-            self.menuOpen = false
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self, menu === controller.menu else { return }
+            controller.menuOpen = false
         }
     }
 
@@ -189,11 +190,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             _ = model.menuBarActivity
             _ = model.statusMessage
         } onChange: { [weak self] in
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let controller = self else { return }
                 MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.applyIcon()
-                    self.trackIcon()
+                    controller.applyIcon()
+                    controller.trackIcon()
                 }
             }
         }
@@ -212,27 +213,45 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc nonisolated private func storeWindows(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated { self.model.storeNow() }
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
+            controller.model.storeNow()
+        }
     }
 
     @objc nonisolated private func restoreWindows(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated { self.model.restoreNow() }
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
+            controller.model.restoreNow()
+        }
     }
 
     @objc nonisolated private func toggleAutoRestore(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated { self.model.autoRestore.toggle() }
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
+            controller.model.autoRestore.toggle()
+        }
     }
 
     @objc nonisolated private func toggleLogin(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated { self.model.toggleLoginItem() }
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
+            controller.model.toggleLoginItem()
+        }
     }
 
     @objc nonisolated private func openAccessibilitySettings(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated { self.model.openAccessibilitySettings() }
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
+            controller.model.openAccessibilitySettings()
+        }
     }
 
     @objc nonisolated private func openPreferences(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated { self.model.openPreferences() }
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
+            controller.model.openPreferences()
+        }
     }
 
     @objc nonisolated private func quit(_ sender: NSMenuItem) {
@@ -240,20 +259,25 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc nonisolated private func ignoreFrontmost(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated { self.model.ignoreFrontmost() }
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
+            controller.model.ignoreFrontmost()
+        }
     }
 
     @objc nonisolated private func removeIgnored(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated {
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
             guard let bundleID = sender.representedObject as? String else { return }
-            self.model.removeIgnored(bundleID)
+            controller.model.removeIgnored(bundleID)
         }
     }
 
     @objc nonisolated private func deleteSavedLayout(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated {
+        MainActor.assumeIsolated { [weak self] in
+            guard let controller = self else { return }
             guard let key = sender.representedObject as? String else { return }
-            self.model.deleteLayout(key: key)
+            controller.model.deleteLayout(key: key)
         }
     }
 }

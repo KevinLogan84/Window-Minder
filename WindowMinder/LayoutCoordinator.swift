@@ -170,8 +170,9 @@ final class LayoutCoordinator {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                self?.screenParametersChanged()
+                coordinator.screenParametersChanged()
             }
         }
         observers.append(token)
@@ -183,8 +184,9 @@ final class LayoutCoordinator {
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                self?.wake()
+                coordinator.wake()
             }
         }
         observers.append(token)
@@ -194,8 +196,9 @@ final class LayoutCoordinator {
         guard acceptingSnapshots, accessibility.isTrusted else { return }
         activityWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
+            guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                self?.refreshSnapshot()
+                coordinator.refreshSnapshot()
             }
         }
         activityWork = work
@@ -225,8 +228,9 @@ final class LayoutCoordinator {
     private func scheduleScreenCommit() {
         screenWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
+            guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                self?.commitScreenChange()
+                coordinator.commitScreenChange()
             }
         }
         screenWork = work
@@ -295,8 +299,9 @@ final class LayoutCoordinator {
         snapshotTimer = nil
         wakeWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
+            guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                self?.commitWake()
+                coordinator.commitWake()
             }
         }
         wakeWork = work
@@ -354,8 +359,9 @@ final class LayoutCoordinator {
     private func startSnapshotTimer() {
         snapshotTimer?.invalidate()
         snapshotTimer = Timer.scheduledTimer(withTimeInterval: SnapshotSchedule.backstopInterval, repeats: true) { [weak self] _ in
+            guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                self?.refreshSnapshot()
+                coordinator.refreshSnapshot()
             }
         }
     }
@@ -363,8 +369,9 @@ final class LayoutCoordinator {
     private func startPeriodicTimer() {
         periodicTimer?.invalidate()
         periodicTimer = Timer.scheduledTimer(withTimeInterval: LayoutTiming.periodicSaveInterval, repeats: true) { [weak self] _ in
+            guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                self?.periodicSave()
+                coordinator.periodicSave()
             }
         }
     }

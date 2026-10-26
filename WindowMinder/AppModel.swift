@@ -130,8 +130,9 @@ final class AppModel {
             queue: .main
         ) { [weak self] notification in
             let bundleID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+            guard let model = self else { return }
             MainActor.assumeIsolated {
-                self?.noteExternalFrontmost(bundleID, recheckTrust: true)
+                model.noteExternalFrontmost(bundleID, recheckTrust: true)
             }
         }
     }
@@ -387,9 +388,10 @@ final class AppModel {
         let generation = notificationRecheckGeneration
         for delay in AccessibilityTrustPolling.notificationFollowUpDelays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let model = self else { return }
                 MainActor.assumeIsolated {
-                    guard let self, generation == self.notificationRecheckGeneration else { return }
-                    self.refreshAccessibilityTrust(source: .notification)
+                    guard generation == model.notificationRecheckGeneration else { return }
+                    model.refreshAccessibilityTrust(source: .notification)
                 }
             }
         }
@@ -409,8 +411,9 @@ final class AppModel {
     private func startTrustPollingIfNeeded() {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
+                guard let model = self else { return }
                 MainActor.assumeIsolated {
-                    self?.startTrustPollingIfNeeded()
+                    model.startTrustPollingIfNeeded()
                 }
             }
             return

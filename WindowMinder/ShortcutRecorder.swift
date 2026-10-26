@@ -127,9 +127,9 @@ private final class KeyMonitorView: NSView {
         // The handler is @Sendable and must return before the event is delivered.
         // AppKit calls it on the main thread.
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            let consume = MainActor.assumeIsolated { () -> Bool in
-                guard let self, self.isRecording else { return false }
-                self.onKey?(event)
+            let consume = MainActor.assumeIsolated { [weak self] () -> Bool in
+                guard let view = self, view.isRecording else { return false }
+                view.onKey?(event)
                 return true
             }
             return consume ? nil : event
@@ -148,12 +148,13 @@ private final class KeyMonitorView: NSView {
 
     deinit {
         let monitor = self.monitor
+        let view = self
         // The view is released on the main thread. deinit itself is nonisolated.
         MainActor.assumeIsolated {
             if let monitor {
                 NSEvent.removeMonitor(monitor)
             }
-            if Self.active === self {
+            if Self.active === view {
                 Self.active = nil
             }
         }
