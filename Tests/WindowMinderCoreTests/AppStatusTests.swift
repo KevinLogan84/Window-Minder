@@ -290,6 +290,227 @@ final class AppStatusTests: XCTestCase {
         XCTAssertEqual(message, "Launch at Login could not be updated. Operation not permitted.")
     }
 
+    func testTransientActionResultsExpireAfterFourSeconds() {
+        XCTAssertEqual(MenuStatusLine.displayInterval, 4)
+        let posted = Date(timeIntervalSince1970: 1_000)
+        let results = [
+            "Deleted the saved layout.",
+            "Stored 2 windows from 1 app",
+            "Restored 1 window",
+            "There is no frontmost app to ignore.",
+            "Window Minder cannot ignore itself.",
+            "Ignoring Safari.",
+            "Window Minder is still starting.",
+            "No saved layout for this display setup.",
+            "Could not store windows. 1 app did not respond",
+        ]
+        for result in results {
+            let fresh = MenuStatusLine.resolve(
+                message: result,
+                postedAt: posted,
+                now: posted.addingTimeInterval(3.999),
+                accessibilityTrusted: true,
+                inProgressMessage: nil
+            )
+            XCTAssertTrue(fresh.isTransient, result)
+            XCTAssertEqual(fresh.message, result, result)
+            XCTAssertNil(fresh.replacement, result)
+
+            let expired = MenuStatusLine.resolve(
+                message: result,
+                postedAt: posted,
+                now: posted.addingTimeInterval(MenuStatusLine.displayInterval),
+                accessibilityTrusted: true,
+                inProgressMessage: nil
+            )
+            XCTAssertFalse(expired.isTransient, result)
+            XCTAssertNil(expired.message, result)
+            XCTAssertNil(expired.replacement, result)
+        }
+    }
+
+    func testMenuOpenReplacesAnExpiredActionResultWithTheCurrentState() {
+        let now = Date(timeIntervalSince1970: 5_000)
+        let expiredAt = now.addingTimeInterval(-MenuStatusLine.displayInterval)
+
+        let ready = MenuStatusLine.resolve(
+            message: "Deleted the saved layout.",
+            postedAt: expiredAt,
+            now: now,
+            accessibilityTrusted: true,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(ready.isTransient)
+        XCTAssertNil(ready.message)
+
+        let missingTimestamp = MenuStatusLine.resolve(
+            message: "Deleted the saved layout.",
+            postedAt: nil,
+            now: now,
+            accessibilityTrusted: true,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(missingTimestamp.isTransient)
+        XCTAssertNil(missingTimestamp.message)
+
+        let needsAccess = MenuStatusLine.resolve(
+            message: "Deleted the saved layout.",
+            postedAt: expiredAt,
+            now: now,
+            accessibilityTrusted: false,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(needsAccess.isTransient)
+        XCTAssertEqual(needsAccess.message, MenuStatusLine.accessibilityNeeded)
+        XCTAssertEqual(needsAccess.replacement, MenuStatusLine.accessibilityNeeded)
+
+        let stillShowing = MenuStatusLine.resolve(
+            message: "Deleted the saved layout.",
+            postedAt: now.addingTimeInterval(-1),
+            now: now,
+            accessibilityTrusted: false,
+            inProgressMessage: nil
+        )
+        XCTAssertTrue(stillShowing.isTransient)
+        XCTAssertEqual(stillShowing.message, "Deleted the saved layout.")
+        XCTAssertEqual(stillShowing.replacement, MenuStatusLine.accessibilityNeeded)
+
+        let storing = MenuStatusLine.resolve(
+            message: "Deleted the saved layout.",
+            postedAt: now.addingTimeInterval(-1),
+            now: now,
+            accessibilityTrusted: true,
+            inProgressMessage: MenuStatusLine.storing
+        )
+        XCTAssertFalse(storing.isTransient)
+        XCTAssertEqual(storing.message, MenuStatusLine.storing)
+
+        let restoring = MenuStatusLine.resolve(
+            message: "Stored 1 window from 1 app",
+            postedAt: nil,
+            now: now,
+            accessibilityTrusted: false,
+            inProgressMessage: MenuStatusLine.restoring
+        )
+        XCTAssertFalse(restoring.isTransient)
+        XCTAssertEqual(restoring.message, MenuStatusLine.restoring)
+    }
+
+    func testAccessibilityWarningStaysUntilAccessIsGranted() {
+        XCTAssertEqual(MenuStatusLine.accessibilityNeeded, "Accessibility access is not granted.")
+        let now = Date(timeIntervalSince1970: 8_000)
+
+        let denied = MenuStatusLine.resolve(
+            message: MenuStatusLine.accessibilityNeeded,
+            postedAt: now.addingTimeInterval(-3600),
+            now: now,
+            accessibilityTrusted: false,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(denied.isTransient)
+        XCTAssertEqual(denied.message, MenuStatusLine.accessibilityNeeded)
+        XCTAssertEqual(denied.replacement, MenuStatusLine.accessibilityNeeded)
+
+        let deniedWithoutTimestamp = MenuStatusLine.resolve(
+            message: "  Accessibility access is not granted. \n",
+            postedAt: nil,
+            now: now,
+            accessibilityTrusted: false,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(deniedWithoutTimestamp.isTransient)
+        XCTAssertEqual(deniedWithoutTimestamp.message, MenuStatusLine.accessibilityNeeded)
+
+        let deniedDuringStore = MenuStatusLine.resolve(
+            message: MenuStatusLine.accessibilityNeeded,
+            postedAt: now.addingTimeInterval(-30),
+            now: now,
+            accessibilityTrusted: false,
+            inProgressMessage: MenuStatusLine.storing
+        )
+        XCTAssertFalse(deniedDuringStore.isTransient)
+        XCTAssertEqual(deniedDuringStore.message, MenuStatusLine.accessibilityNeeded)
+
+        let granted = MenuStatusLine.resolve(
+            message: MenuStatusLine.accessibilityNeeded,
+            postedAt: now,
+            now: now,
+            accessibilityTrusted: true,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(granted.isTransient)
+        XCTAssertNil(granted.message)
+
+        let idleAndUntrusted = MenuStatusLine.resolve(
+            message: nil,
+            postedAt: nil,
+            now: now,
+            accessibilityTrusted: false,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(idleAndUntrusted.isTransient)
+        XCTAssertNil(idleAndUntrusted.message)
+        XCTAssertEqual(idleAndUntrusted.replacement, MenuStatusLine.accessibilityNeeded)
+
+        let blank = MenuStatusLine.resolve(
+            message: " \n\t",
+            postedAt: now.addingTimeInterval(-30),
+            now: now,
+            accessibilityTrusted: true,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(blank.isTransient)
+        XCTAssertNil(blank.message)
+    }
+
+    func testInProgressStoreAndRestoreStayUntilTheWorkFinishes() {
+        XCTAssertEqual(MenuStatusLine.storing, "Storing windows…")
+        XCTAssertEqual(MenuStatusLine.restoring, "Restoring windows…")
+        let now = Date(timeIntervalSince1970: 9_000)
+
+        let storing = MenuStatusLine.resolve(
+            message: MenuStatusLine.storing,
+            postedAt: now.addingTimeInterval(-30),
+            now: now,
+            accessibilityTrusted: true,
+            inProgressMessage: MenuStatusLine.storing
+        )
+        XCTAssertFalse(storing.isTransient)
+        XCTAssertEqual(storing.message, MenuStatusLine.storing)
+        XCTAssertEqual(storing.replacement, MenuStatusLine.storing)
+
+        let restoring = MenuStatusLine.resolve(
+            message: MenuStatusLine.restoring,
+            postedAt: now,
+            now: now.addingTimeInterval(10),
+            accessibilityTrusted: true,
+            inProgressMessage: MenuStatusLine.restoring
+        )
+        XCTAssertFalse(restoring.isTransient)
+        XCTAssertEqual(restoring.message, MenuStatusLine.restoring)
+
+        let finished = MenuStatusLine.resolve(
+            message: "Restored 3 windows. Skipped 1",
+            postedAt: now,
+            now: now.addingTimeInterval(1),
+            accessibilityTrusted: true,
+            inProgressMessage: nil
+        )
+        XCTAssertTrue(finished.isTransient)
+        XCTAssertEqual(finished.message, "Restored 3 windows. Skipped 1")
+        XCTAssertNil(finished.replacement)
+
+        let stuckAfterFinish = MenuStatusLine.resolve(
+            message: MenuStatusLine.storing,
+            postedAt: now.addingTimeInterval(-30),
+            now: now,
+            accessibilityTrusted: true,
+            inProgressMessage: nil
+        )
+        XCTAssertFalse(stuckAfterFinish.isTransient)
+        XCTAssertNil(stuckAfterFinish.message)
+    }
+
     func testRegistrationFailureOutsideApplicationsMentionsBothFolders() {
         let message = LoginItemPresentation.registrationFailureMessage(
             errorDescription: "The app could not be found.",

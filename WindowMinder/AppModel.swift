@@ -22,11 +22,14 @@ final class AppModel {
     private var notificationRecheckGeneration = 0
     private var lastActivationCheckUptime: TimeInterval = -1
     private let accessibilityChanges = AccessibilityChangeObserver()
-    private static let deniedStatusMessage = "Accessibility access is not granted."
     private static weak var trustRefreshTarget: AppModel?
     var onAccessibilityTrustChange: (@MainActor () -> Void)?
     private var windowOperation: Task<Void, Never>?
     private var menuBarGeneration = 0
+    /// Status text that belongs to a store or restore that has not finished.
+    private var inProgressStatus: String?
+    private var statusPostedAt: Date?
+    private var statusExpiryGeneration = 0
 
     var autoRestore: Bool {
         didSet { defaults.set(autoRestore, forKey: Keys.autoRestore) }
@@ -101,7 +104,7 @@ final class AppModel {
             }
         )
         coordinator.onStatus = { [weak self] message in
-            self?.statusMessage = message
+            self?.presentStatus(message)
         }
         coordinator.onLayoutsChanged = { [weak self] in
             self?.reloadLayouts()
@@ -149,6 +152,9 @@ final class AppModel {
 
     func refreshForMenu() {
         refreshAccessibilityTrust(source: .menuOpen)
+        // The clear may not have resumed yet. Opening the menu applies the
+        // same timestamp decision, so a fired timer cannot leave a leftover.
+        reconcileStatusLine(now: Date())
         let state = loginItems.state()
         if loginState != state {
             loginState = state
@@ -170,9 +176,7 @@ final class AppModel {
         if changed {
             accessibilityTrusted = trusted
         }
-        if trusted, statusMessage == Self.deniedStatusMessage {
-            statusMessage = nil
-        }
+        reconcileStatusLine(now: Date())
         updateTrustPolling()
         if changed {
             if trusted {
@@ -207,7 +211,7 @@ final class AppModel {
     }
 
     func storeNow() {
-        guard beginWindowOperation(starting: "Storing windows…") else { return }
+        guard beginWindowOperation(starting: MenuStatusLine.storing) else { return }
         windowOperation = Task { @MainActor in
             let message = await self.coordinator?.storeCurrent() ?? "Window Minder is still starting."
             self.finishWindowOperation(message)
@@ -215,7 +219,7 @@ final class AppModel {
     }
 
     func restoreNow() {
-        guard beginWindowOperation(starting: "Restoring windows…") else { return }
+        guard beginWindowOperation(starting: MenuStatusLine.restoring) else { return }
         windowOperation = Task { @MainActor in
             let message = await self.coordinator?.restoreCurrent() ?? "Window Minder is still starting."
             self.finishWindowOperation(message)
@@ -226,9 +230,9 @@ final class AppModel {
         do {
             try coordinator?.delete(key: key)
             reloadLayouts()
-            statusMessage = "Deleted the saved layout."
+            presentStatus("Deleted the saved layout.")
         } catch {
-            statusMessage = error.localizedDescription
+            presentStatus(error.localizedDescription)
         }
     }
 
@@ -255,18 +259,18 @@ final class AppModel {
             bundleID = externalFrontmostBundleID
         }
         guard let bundleID else {
-            statusMessage = "There is no frontmost app to ignore."
+            presentStatus("There is no frontmost app to ignore.")
             return
         }
         if isOwnBundle(bundleID) {
-            statusMessage = "Window Minder cannot ignore itself."
+            presentStatus("Window Minder cannot ignore itself.")
             return
         }
         if !ignoredBundleIDs.contains(bundleID) {
             ignoredBundleIDs.append(bundleID)
             ignoredBundleIDs.sort()
         }
-        statusMessage = "Ignoring \(appName(for: bundleID))."
+        presentStatus("Ignoring \(appName(for: bundleID)).")
     }
 
     func removeIgnored(_ bundleID: String) {
@@ -328,19 +332,24 @@ final class AppModel {
         guard windowOperation == nil else { return false }
         guard trustOrExplain() else { return false }
         guard coordinator != nil else {
-            statusMessage = "Window Minder is still starting."
+            inProgressStatus = nil
+            presentStatus("Window Minder is still starting.")
             return false
         }
         menuBarGeneration += 1
         menuBarActivity = .busy
-        statusMessage = starting
+        inProgressStatus = starting
+        presentStatus(starting)
         return true
     }
 
     private func finishWindowOperation(_ message: String) {
         windowOperation = nil
+        inProgressStatus = nil
         if !message.isEmpty {
-            statusMessage = message
+            presentStatus(message)
+        } else {
+            reconcileStatusLine(now: Date())
         }
         reloadLayouts()
         guard message.hasPrefix("Stored ") || message.hasPrefix("Restored ") else {
@@ -360,10 +369,67 @@ final class AppModel {
     private func trustOrExplain() -> Bool {
         refreshAccessibilityTrust(source: .action)
         guard accessibilityTrusted else {
-            statusMessage = Self.deniedStatusMessage
+            inProgressStatus = nil
+            presentStatus(MenuStatusLine.accessibilityNeeded)
             return false
         }
         return true
+    }
+
+    /// Records a status line and, when it is only the result of a click,
+    /// clears it after `MenuStatusLine.displayInterval`. The sleep does not
+    /// run on the menu's tracking loop. Opening the menu reconciles from the
+    /// timestamp if this task has not resumed yet.
+    private func presentStatus(_ message: String?) {
+        let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text: String? = trimmed.isEmpty ? nil : trimmed
+        statusPostedAt = text == nil ? nil : Date()
+        statusMessage = text
+        scheduleStatusExpiry()
+    }
+
+    private func scheduleStatusExpiry() {
+        statusExpiryGeneration += 1
+        let generation = statusExpiryGeneration
+        let decision = statusDecision(now: Date())
+        applyStatusDecision(decision)
+        guard decision.isTransient else { return }
+        let nanoseconds = UInt64(MenuStatusLine.displayInterval * 1_000_000_000)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard generation == self.statusExpiryGeneration else { return }
+            self.reconcileStatusLine(now: Date())
+        }
+    }
+
+    /// Shows the current state once a transient line is older than the
+    /// display interval. A line that is still the real state is left alone.
+    private func reconcileStatusLine(now: Date) {
+        let decision = statusDecision(now: now)
+        applyStatusDecision(decision)
+        if decision.isTransient {
+            return
+        }
+        statusExpiryGeneration += 1
+    }
+
+    private func applyStatusDecision(_ decision: MenuStatusLine.Resolution) {
+        if statusMessage != decision.message {
+            statusMessage = decision.message
+        }
+        if !decision.isTransient {
+            statusPostedAt = nil
+        }
+    }
+
+    private func statusDecision(now: Date) -> MenuStatusLine.Resolution {
+        MenuStatusLine.resolve(
+            message: statusMessage,
+            postedAt: statusPostedAt,
+            now: now,
+            accessibilityTrusted: accessibilityTrusted,
+            inProgressMessage: inProgressStatus
+        )
     }
 
     private func observeAccessibilityTrust() {
