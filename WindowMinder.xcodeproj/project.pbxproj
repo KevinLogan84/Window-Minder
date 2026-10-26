@@ -47,6 +47,8 @@
 		BF4FBD4F17668E4BE0309CD9 /* SHA256Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F4F42669B7DF06A7EDDC548 /* SHA256Tests.swift */; };
 		FE0BEBB69A0BB48DB868684E /* WindowMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C75633071EC6AF705543D7D /* WindowMatcherTests.swift */; };
 		025E8B36822F30A09ECD3CFE /* XCTest.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3AA13BB3408EA76CFEFD3571 /* XCTest.framework */; };
+		C8F5B2D10E3A49B7C4D6F8E2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B7E4A1C09D2F48A6B3C5E7D1 /* Assets.xcassets */; };
+		E1A7D4F32B5C61D9E6F8B0A4 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = F2B8E5A43C6D72E0F7A9C1B5 /* AppIcon.icon */; };
 		31DEEE831E65179E5D94A0D7 /* AccessibilityClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccessibilityClient.swift; sourceTree = "<group>"; };
 		5D1F8A36C4B04E92A7C3D6E8 /* AXWindowWork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXWindowWork.swift; sourceTree = "<group>"; };
 		F66CBCC257703DC1D1EDFDA3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -78,12 +80,23 @@
 		9F4F42669B7DF06A7EDDC548 /* SHA256Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SHA256Tests.swift; sourceTree = "<group>"; };
 		5C75633071EC6AF705543D7D /* WindowMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowMatcherTests.swift; sourceTree = "<group>"; };
 		C1D23BEB50C0A1ADC91C812C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B7E4A1C09D2F48A6B3C5E7D1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F2B8E5A43C6D72E0F7A9C1B5 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 		B66BCDC810D3FCEA23D284EF /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		91651A58CDFAF0B84DF5C142 /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Package.swift; sourceTree = "<group>"; };
 		87B680BF903E3540848F84A5 /* ci.yml */ = {isa = PBXFileReference; lastKnownFileType = text.yaml; path = ci.yml; sourceTree = "<group>"; };
 		B6CDB6E5D160E013280D3C68 /* WindowMinder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WindowMinder.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8D8270AA6DB8732282C9541 /* WindowMinderCoreTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WindowMinderCoreTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3AA13BB3408EA76CFEFD3571 /* XCTest.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = XCTest.framework; path = "Platforms/MacOSX.platform/Developer/Library/Frameworks/XCTest.framework"; sourceTree = DEVELOPER_DIR; };
+		D9A6C3E21F4B50C8D5E7A9F3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C8F5B2D10E3A49B7C4D6F8E2 /* Assets.xcassets in Resources */,
+				E1A7D4F32B5C61D9E6F8B0A4 /* AppIcon.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F001BC2AF9EB5498B3360756 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -115,6 +128,8 @@
 				C9616A6D9CC865CBB48671F4 /* PreferencesView.swift */,
 				9A033AF887CA4B707B64B672 /* ShortcutRecorder.swift */,
 				71CAB0330F409327E3123B3D /* WindowMinderApp.swift */,
+				B7E4A1C09D2F48A6B3C5E7D1 /* Assets.xcassets */,
+				F2B8E5A43C6D72E0F7A9C1B5 /* AppIcon.icon */,
 				C1D23BEB50C0A1ADC91C812C /* Info.plist */,
 			);
 			path = WindowMinder;
@@ -277,6 +292,7 @@
 			buildPhases = (
 				8682261519D15BD64A9E5D31 /* Sources */,
 				F001BC2AF9EB5498B3360756 /* Frameworks */,
+				D9A6C3E21F4B50C8D5E7A9F3 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -430,8 +446,10 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WindowMinder/Info.plist;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSUIElement = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -469,8 +487,10 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WindowMinder/Info.plist;
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
 				INFOPLIST_KEY_LSUIElement = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
