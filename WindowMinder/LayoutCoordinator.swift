@@ -19,10 +19,12 @@ enum LayoutTiming {
 /// display setup is stable. The screen-parameter notification arrives after the
 /// change, so that earlier snapshot is what gets written for the previous setup.
 ///
-/// Login, wake, and display reconfiguration share one debounce. Restore reads the
-/// layout from disk for the settled display key and retries apps that are not
-/// running yet. The snapshot taken at launch is the saved layout, not the positions
-/// macOS used before those apps opened.
+/// Login, wake, screen wake, session unlock, and display reconfiguration share
+/// one debounce in `DisplayRestoreCoalescer`. Restore reads the layout from disk
+/// for the settled display key and retries apps that are not running yet. The
+/// snapshot taken at launch is the saved layout, not the positions macOS used
+/// before those apps opened. A pointer button that is held down defers that
+/// restore until the drag ends.
 @MainActor
 final class LayoutCoordinator {
     var onStatus: @MainActor (String) -> Void = { _ in }
@@ -38,6 +40,7 @@ final class LayoutCoordinator {
     private var snapshotTimer: Timer?
     private var periodicTimer: Timer?
     private var screenWork: DispatchWorkItem?
+    private var dragWatch: Timer?
     private var activityWork: DispatchWorkItem?
     private var lastSnapshotAt: Date?
     private var displayChangePending = false
@@ -49,7 +52,9 @@ final class LayoutCoordinator {
     private var suppressDisplayReaction = false
     private var displayTask: Task<Void, Never>?
     private var launched = false
-    private var restoreEvenIfUnchanged = false
+    private var coalescer = DisplayRestoreCoalescer()
+    private static let dragRecheckInterval: TimeInterval = 0.2
+    private static let screenIsUnlocked = Notification.Name("com.apple.screenIsUnlocked")
 
     private struct Snapshot {
         var configuration: DisplayConfiguration
@@ -78,7 +83,7 @@ final class LayoutCoordinator {
         acceptingSnapshots = false
         if accessibility.isTrusted {
             if settings().autoRestore {
-                scheduleSettledRestore(evenIfUnchanged: true)
+                noteDisplaySignal(.launch)
             } else {
                 acceptingSnapshots = true
                 refreshSnapshot()
@@ -92,7 +97,7 @@ final class LayoutCoordinator {
     func accessibilityWasGranted() {
         guard launched, accessibility.isTrusted else { return }
         if settings().autoRestore {
-            scheduleSettledRestore(evenIfUnchanged: true)
+            noteDisplaySignal(.launch)
         } else if !acceptingSnapshots {
             acceptingSnapshots = true
             refreshSnapshot()
@@ -224,8 +229,14 @@ final class LayoutCoordinator {
         )
         await acquireAX()
         defer { releaseAX() }
+        let applyGeneration = displayGeneration
         suppressDisplayReaction = true
-        defer { finishDisplaySuppression() }
+        defer {
+            finishDisplaySuppression(
+                restoredConfigurationKey: configuration.key,
+                generation: applyGeneration
+            )
+        }
         let ignored = settings().ignoredBundleIdentifiers
         var restored = 0
         var failed = 0
@@ -305,18 +316,41 @@ final class LayoutCoordinator {
         DisplayReconfigurationMonitor.shared.start()
     }
 
+    /// System wake, display wake, and unlock share the display-change debounce.
+    /// Each one restarts that wait. `DisplayRestoreCoalescer` keeps them from
+    /// moving windows twice for the same setup.
     private func observeWake() {
-        let token = NSWorkspace.shared.notificationCenter.addObserver(
+        let workspace = NSWorkspace.shared.notificationCenter
+        observers.append(workspace.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                coordinator.wake()
+                coordinator.noteDisplaySignal(.wake)
             }
-        }
-        observers.append(token)
+        })
+        observers.append(workspace.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let coordinator = self else { return }
+            MainActor.assumeIsolated {
+                coordinator.noteDisplaySignal(.screensWake)
+            }
+        })
+        observers.append(DistributedNotificationCenter.default().addObserver(
+            forName: screenIsUnlocked,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let coordinator = self else { return }
+            MainActor.assumeIsolated {
+                coordinator.noteDisplaySignal(.sessionUnlock)
+            }
+        })
     }
 
     func noteUserActivity() {
@@ -340,82 +374,146 @@ final class LayoutCoordinator {
             snapshotTimer = nil
             return
         }
-        scheduleSettledRestore(evenIfUnchanged: false)
+        noteDisplaySignal(.displayChange)
     }
 
-    private func wake() {
-        scheduleSettledRestore(evenIfUnchanged: true)
+    private func noteDisplaySignal(_ signal: DisplayRestoreCoalescer.Signal) {
+        switch coalescer.note(signal, at: monotonicNow()) {
+        case .arm(let generation):
+            beginQuietWait(generation: generation)
+        case .coalesced:
+            break
+        }
     }
 
-    private func finishDisplaySuppression() {
+    /// A layout apply finished. A display key that changed during the apply gets
+    /// one more quiet wait. The same key does not restore again.
+    private func finishDisplaySuppression(restoredConfigurationKey: String, generation: Int) {
+        guard self.displayGeneration == generation else {
+            // A newer quiet wait owns the next decision. Drop this apply's
+            // suppression so later display events still reach that wait.
+            suppressDisplayReaction = false
+            displayChangePending = false
+            return
+        }
         suppressDisplayReaction = false
-        guard displayChangePending else { return }
+        let pending = displayChangePending
         displayChangePending = false
-        scheduleSettledRestore(evenIfUnchanged: false)
+        let current = displays.current()
+        // Empty means the displays have not come back yet, so keep waiting.
+        // The same key is not a second restore.
+        let keyChanged = pending && (current.displays.isEmpty || current.key != restoredConfigurationKey)
+        var armedFollowUp = false
+        if keyChanged {
+            switch coalescer.note(.displayChange, at: monotonicNow()) {
+            case .arm(let quietGeneration):
+                beginQuietWait(generation: quietGeneration)
+                armedFollowUp = true
+            case .coalesced:
+                break
+            }
+        } else {
+            coalescer.cancelFollowUp()
+        }
+        if !armedFollowUp {
+            switch coalescer.restoreFinished() {
+            case .arm(let quietGeneration):
+                beginQuietWait(generation: quietGeneration)
+                armedFollowUp = true
+            case .idle:
+                break
+            }
+        }
+        if !armedFollowUp, !keyChanged, !acceptingSnapshots {
+            resumeSnapshots(for: current)
+        }
     }
 
-    private func scheduleSettledRestore(evenIfUnchanged: Bool) {
+    private func beginQuietWait(generation: Int) {
         acceptingSnapshots = false
         snapshotTimer?.invalidate()
         snapshotTimer = nil
         activityWork?.cancel()
         activityWork = nil
-        if evenIfUnchanged {
-            restoreEvenIfUnchanged = true
-        }
+        dragWatch?.invalidate()
+        dragWatch = nil
         screenWork?.cancel()
+        displayGeneration += 1
         let work = DispatchWorkItem { [weak self] in
             guard let coordinator = self else { return }
             MainActor.assumeIsolated {
-                coordinator.commitSettledConfiguration()
+                coordinator.commitSettledConfiguration(generation: generation)
             }
         }
         screenWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + DisplayRestoreTiming.debounce, execute: work)
     }
 
-    private func commitSettledConfiguration() {
-        let always = restoreEvenIfUnchanged
-        restoreEvenIfUnchanged = false
+    private func commitSettledConfiguration(generation: Int) {
+        guard coalescer.accepts(generation) else { return }
         let newConfiguration = displays.current()
         let previous = snapshot
         let keyChanged = previous?.configuration.key != newConfiguration.key
-        var notes: [String] = []
-        if settings().saveBeforeDisplayChange,
-           let previous,
-           !previous.configuration.displays.isEmpty,
-           previous.configuration.key != newConfiguration.key {
-            let layouts = (try? store.list()) ?? []
-            let existingCount = LayoutCatalog.layout(for: previous.configuration, in: layouts)?.windows.count
-            if LayoutOverwrite.shouldReplaceSavedLayout(
-                existingWindowCount: existingCount,
-                capturedWindowCount: previous.windows.count
-            ) {
-                let layout = SavedLayout(
-                    version: SavedLayout.currentVersion,
-                    key: previous.configuration.key,
-                    savedAt: previous.capturedAt,
-                    displays: previous.configuration.displays,
-                    windows: previous.windows
-                )
-                do {
-                    try store.save(layout)
-                    onLayoutsChanged()
-                    notes.append("Saved the previous display setup.")
-                } catch {
-                    notes.append("Could not save the previous display setup.")
+        let autoRestore = settings().autoRestore
+        let decision = coalescer.evaluate(
+            generation,
+            DisplayRestoreCoalescer.Probe(
+                autoRestore: autoRestore,
+                displayKey: newConfiguration.displays.isEmpty ? nil : newConfiguration.key,
+                hasSavedLayout: autoRestore && hasSavedLayout(for: newConfiguration),
+                dragInProgress: PointerDrag.isInProgress(pressedMouseButtons: NSEvent.pressedMouseButtons),
+                keyChanged: keyChanged,
+                now: monotonicNow()
+            )
+        )
+        switch decision {
+        case .waitForDisplays(let generation):
+            beginQuietWait(generation: generation)
+        case .deferUntilDragEnds(let generation):
+            layoutLogger.info("Deferring layout restore until the pointer button is up")
+            watchForDragEnd(generation: generation)
+        case .skip:
+            let notes = savePreviousLayoutIfNeeded(previous: previous, current: newConfiguration)
+            if !notes.isEmpty {
+                onStatus(notes.joined(separator: " "))
+            }
+            resumeSnapshots(for: newConfiguration)
+        case .restore:
+            let notes = savePreviousLayoutIfNeeded(previous: previous, current: newConfiguration)
+            if !notes.isEmpty {
+                onStatus(notes.joined(separator: " "))
+            }
+            startSettledRestore(configuration: newConfiguration, notes: notes)
+        }
+    }
+
+    private func watchForDragEnd(generation: Int) {
+        dragWatch?.invalidate()
+        let timer = Timer(timeInterval: Self.dragRecheckInterval, repeats: true) { [weak self] timer in
+            guard let coordinator = self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated {
+                guard coordinator.coalescer.accepts(generation) else {
+                    timer.invalidate()
+                    if coordinator.dragWatch === timer {
+                        coordinator.dragWatch = nil
+                    }
+                    return
                 }
+                guard !PointerDrag.isInProgress(pressedMouseButtons: NSEvent.pressedMouseButtons) else { return }
+                timer.invalidate()
+                coordinator.dragWatch = nil
+                coordinator.commitSettledConfiguration(generation: generation)
             }
         }
-        let shouldRestore = DisplayRestorePolicy.shouldRestore(
-            autoRestore: settings().autoRestore,
-            hasDisplays: !newConfiguration.displays.isEmpty,
-            keyChanged: keyChanged,
-            restoreEvenIfUnchanged: always
-        )
-        if !notes.isEmpty {
-            onStatus(notes.joined(separator: " "))
-        }
+        timer.tolerance = 0.05
+        RunLoop.main.add(timer, forMode: .common)
+        dragWatch = timer
+    }
+
+    private func startSettledRestore(configuration: DisplayConfiguration, notes: [String]) {
         displayGeneration += 1
         let generation = displayGeneration
         displayTask?.cancel()
@@ -425,25 +523,81 @@ final class LayoutCoordinator {
                     self.displayTask = nil
                 }
             }
-            if shouldRestore {
-                let message = await self.restoreCurrent(announceWhenIdle: false)
-                guard !Task.isCancelled, self.displayGeneration == generation else { return }
-                if !message.isEmpty {
-                    let combined = (notes + [message]).joined(separator: " ")
-                    self.onStatus(combined)
-                }
+            let message = await self.restoreCurrent(announceWhenIdle: false)
+            guard !Task.isCancelled, self.displayGeneration == generation else { return }
+            if !message.isEmpty {
+                let combined = (notes + [message]).joined(separator: " ")
+                self.onStatus(combined)
             }
             guard !Task.isCancelled, self.displayGeneration == generation else { return }
-            guard self.displays.current().key == newConfiguration.key else {
+            guard self.displays.current().key == configuration.key else {
                 self.screenParametersChanged()
                 return
             }
-            self.acceptingSnapshots = true
-            if self.snapshot?.configuration.key != newConfiguration.key {
-                self.refreshSnapshot()
-            }
-            self.startSnapshotTimer()
+            self.resumeSnapshots(for: configuration)
         }
+    }
+
+    private func resumeSnapshots(for configuration: DisplayConfiguration) {
+        acceptingSnapshots = true
+        if snapshot?.configuration.key != configuration.key {
+            refreshSnapshot()
+        }
+        startSnapshotTimer()
+    }
+
+    /// Windows already saved for this display setup, including a legacy file the catalog
+    /// still matches. A store that cannot be read is treated as present so the restore
+    /// path can report the error instead of looking like an empty setup.
+    private func hasSavedLayout(for configuration: DisplayConfiguration) -> Bool {
+        guard !configuration.displays.isEmpty else { return false }
+        do {
+            if try store.load(key: configuration.key) != nil {
+                return true
+            }
+            return LayoutCatalog.layout(for: configuration, in: try store.list()) != nil
+        } catch {
+            layoutLogger.error(
+                "Could not read saved layouts before auto-restore: \(error.localizedDescription, privacy: .public)"
+            )
+            return true
+        }
+    }
+
+    private func savePreviousLayoutIfNeeded(previous: Snapshot?, current: DisplayConfiguration) -> [String] {
+        guard settings().saveBeforeDisplayChange,
+              let previous,
+              !previous.configuration.displays.isEmpty,
+              previous.configuration.key != current.key
+        else {
+            return []
+        }
+        let layouts = (try? store.list()) ?? []
+        let existingCount = LayoutCatalog.layout(for: previous.configuration, in: layouts)?.windows.count
+        guard LayoutOverwrite.shouldReplaceSavedLayout(
+            existingWindowCount: existingCount,
+            capturedWindowCount: previous.windows.count
+        ) else {
+            return []
+        }
+        let layout = SavedLayout(
+            version: SavedLayout.currentVersion,
+            key: previous.configuration.key,
+            savedAt: previous.capturedAt,
+            displays: previous.configuration.displays,
+            windows: previous.windows
+        )
+        do {
+            try store.save(layout)
+            onLayoutsChanged()
+            return ["Saved the previous display setup."]
+        } catch {
+            return ["Could not save the previous display setup."]
+        }
+    }
+
+    private func monotonicNow() -> TimeInterval {
+        ProcessInfo.processInfo.systemUptime
     }
 
     private func refreshSnapshot() {

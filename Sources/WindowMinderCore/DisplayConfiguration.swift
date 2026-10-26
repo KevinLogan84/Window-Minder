@@ -142,7 +142,16 @@ enum DisplayConfigKey {
 
 public enum DisplayRestoreTiming {
     /// One restore after a burst of dock, wake, or login events goes quiet.
+    /// Another signal restarts this wait, so displays that keep reconnecting
+    /// do not get a restore in the middle of the burst.
     public static let debounce: TimeInterval = 1.5
+    /// After a restore, the same display setup is not restored again until this
+    /// long has passed. Wake and `screensDidWake` often both fire. A different
+    /// display key is not held back.
+    public static let sameSetupCoalesce: TimeInterval = 4
+    /// If the screens are still empty when the first quiet period ends, a wake
+    /// keeps its "restore even if the key is unchanged" status until this deadline.
+    public static let wakeLayoutWindow: TimeInterval = 8
 }
 
 public enum DisplayRestorePolicy {
@@ -158,6 +167,226 @@ public enum DisplayRestorePolicy {
     ) -> Bool {
         guard autoRestore, hasDisplays else { return false }
         return restoreEvenIfUnchanged || keyChanged
+    }
+}
+
+public enum PointerDrag {
+    /// A window drag holds a mouse button down. `NSEvent.pressedMouseButtons` is the mask.
+    public static func isInProgress(pressedMouseButtons: Int) -> Bool {
+        pressedMouseButtons != 0
+    }
+}
+
+/// One restore for a burst of wake, screen-wake, unlock, and display-change signals.
+///
+/// The app keeps a single quiet timer. `note` restarts it. `evaluate` runs once the
+/// displays have been still for `DisplayRestoreTiming.debounce`. A second evaluation
+/// for a restore that is already running or that just ran for the same display key
+/// does not move windows again. A later key does.
+public struct DisplayRestoreCoalescer: Equatable, Sendable {
+    public enum Signal: Equatable, Sendable {
+        /// Login or Accessibility granted after launch. Same rule as a wake.
+        case launch
+        /// `NSWorkspace.didWakeNotification`.
+        case wake
+        /// `NSWorkspace.screensDidWakeNotification`. Displays often come back here
+        /// without a second system wake.
+        case screensWake
+        /// Distributed `com.apple.screenIsUnlocked`. Re-reads the setup when displays
+        /// appear at unlock. On its own it does not restore an unchanged layout.
+        case sessionUnlock
+        /// `didChangeScreenParametersNotification` or `CGDisplayRegisterReconfigurationCallback`.
+        case displayChange
+
+        /// Launch, system wake, and screen wake put windows back where macOS left them,
+        /// so the saved layout applies even when the display key did not change.
+        public var restoresUnchangedLayout: Bool {
+            switch self {
+            case .launch, .wake, .screensWake:
+                return true
+            case .sessionUnlock, .displayChange:
+                return false
+            }
+        }
+    }
+
+    public enum Schedule: Equatable, Sendable {
+        /// Restart the quiet timer. The generation identifies this attempt.
+        case arm(generation: Int)
+        /// This signal is already covered by the quiet timer or the restore in flight.
+        case coalesced(generation: Int)
+    }
+
+    public struct Probe: Equatable, Sendable {
+        public var autoRestore: Bool
+        public var displayKey: String?
+        public var hasSavedLayout: Bool
+        public var dragInProgress: Bool
+        public var keyChanged: Bool
+        public var now: TimeInterval
+
+        public init(
+            autoRestore: Bool,
+            displayKey: String?,
+            hasSavedLayout: Bool,
+            dragInProgress: Bool,
+            keyChanged: Bool,
+            now: TimeInterval
+        ) {
+            self.autoRestore = autoRestore
+            self.displayKey = displayKey
+            self.hasSavedLayout = hasSavedLayout
+            self.dragInProgress = dragInProgress
+            self.keyChanged = keyChanged
+            self.now = now
+        }
+    }
+
+    public enum Decision: Equatable, Sendable {
+        case restore(key: String, generation: Int)
+        case deferUntilDragEnds(generation: Int)
+        case waitForDisplays(generation: Int)
+        case skip
+    }
+
+    /// What to do after a restore apply finishes.
+    public enum Finished: Equatable, Sendable {
+        case idle
+        /// The display key changed while windows were moving. One more quiet wait.
+        case arm(generation: Int)
+    }
+
+    public private(set) var generation: Int
+
+    private enum Phase: Equatable, Sendable {
+        case idle
+        case waiting(wakeLike: Bool)
+        case deferred(wakeLike: Bool)
+        case restoring(key: String)
+    }
+
+    private var phase: Phase = .idle
+    private var followUp = false
+    private var satisfiedKey: String?
+    private var satisfiedUntil: TimeInterval = -1
+    private var restoreUnchangedUntil: TimeInterval = -1
+
+    public init() {
+        generation = 0
+    }
+
+    /// Record one observer signal. Wake, screen wake, unlock, and display change
+    /// all come through here so they share one timer.
+    public mutating func note(_ signal: Signal, at now: TimeInterval) -> Schedule {
+        if signal.restoresUnchangedLayout {
+            if case .idle = phase, now > satisfiedUntil {
+                satisfiedKey = nil
+            }
+            restoreUnchangedUntil = max(restoreUnchangedUntil, now + DisplayRestoreTiming.wakeLayoutWindow)
+        }
+        switch phase {
+        case .restoring:
+            // A display event during the apply is remembered. Wake notifications
+            // for the same cycle are not a second restore. `restoreFinished`
+            // starts the follow-up only if the key actually changed.
+            if signal == .displayChange || signal == .sessionUnlock {
+                followUp = true
+            }
+            return .coalesced(generation: generation)
+        case .waiting(let wakeLike), .deferred(let wakeLike):
+            generation += 1
+            phase = .waiting(wakeLike: wakeLike || signal.restoresUnchangedLayout)
+            return .arm(generation: generation)
+        case .idle:
+            generation += 1
+            phase = .waiting(wakeLike: signal.restoresUnchangedLayout)
+            return .arm(generation: generation)
+        }
+    }
+
+    /// True when `evaluate` for this quiet-timer generation would change state.
+    public func accepts(_ generation: Int) -> Bool {
+        guard generation == self.generation else { return false }
+        switch phase {
+        case .waiting, .deferred:
+            return true
+        case .idle, .restoring:
+            return false
+        }
+    }
+
+    /// Decide once the displays have been quiet. A mismatched generation is ignored.
+    public mutating func evaluate(_ generation: Int, _ probe: Probe) -> Decision {
+        guard generation == self.generation else { return .skip }
+        let phaseWake: Bool
+        switch phase {
+        case .waiting(let wakeLike), .deferred(let wakeLike):
+            phaseWake = wakeLike
+        case .idle, .restoring:
+            return .skip
+        }
+        let wakeLike = phaseWake || (satisfiedKey == nil && probe.now <= restoreUnchangedUntil)
+
+        guard probe.autoRestore else {
+            phase = .idle
+            return .skip
+        }
+        guard let key = probe.displayKey, !key.isEmpty else {
+            if probe.now <= restoreUnchangedUntil {
+                self.generation += 1
+                phase = .waiting(wakeLike: true)
+                return .waitForDisplays(generation: self.generation)
+            }
+            phase = .idle
+            return .skip
+        }
+        guard probe.hasSavedLayout else {
+            phase = .idle
+            return .skip
+        }
+        if satisfiedKey == key, probe.now <= satisfiedUntil {
+            phase = .idle
+            return .skip
+        }
+        let allowed = DisplayRestorePolicy.shouldRestore(
+            autoRestore: true,
+            hasDisplays: true,
+            keyChanged: probe.keyChanged,
+            restoreEvenIfUnchanged: wakeLike
+        )
+        guard allowed else {
+            phase = .idle
+            return .skip
+        }
+        if probe.dragInProgress {
+            phase = .deferred(wakeLike: wakeLike)
+            return .deferUntilDragEnds(generation: generation)
+        }
+        phase = .restoring(key: key)
+        satisfiedKey = key
+        satisfiedUntil = probe.now + DisplayRestoreTiming.sameSetupCoalesce
+        return .restore(key: key, generation: generation)
+    }
+
+    /// Drop a display-change follow-up when the settled key matches the restore
+    /// that just finished, so a flicker does not schedule a second pass.
+    public mutating func cancelFollowUp() {
+        followUp = false
+    }
+
+    /// The apply finished. A display change recorded while it ran, or a key that
+    /// no longer matches, becomes one new quiet wait. The same key stays put.
+    public mutating func restoreFinished() -> Finished {
+        let follow = followUp
+        followUp = false
+        guard case .restoring = phase else { return .idle }
+        guard follow else {
+            phase = .idle
+            return .idle
+        }
+        generation += 1
+        phase = .waiting(wakeLike: false)
+        return .arm(generation: generation)
     }
 }
 

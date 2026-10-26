@@ -45,6 +45,7 @@
 		9C3B7E51A0D64F28B6A4C1E5 /* WindowOperationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F8A6C14D9E04B73A1C5E7D2 /* WindowOperationTests.swift */; };
 		B471E60FA2382D9BDB7E2239 /* CoordinateConverterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B99F0103E33F7FD786F49D1F /* CoordinateConverterTests.swift */; };
 		098D899CA0BA883EF73663E3 /* DisplayConfigKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16B9C5E5209D750510C2BDBE /* DisplayConfigKeyTests.swift */; };
+		C4E8B1A27F903D64B5C2E1A0 /* DisplayRestoreCoalescerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5F9C2B38A014E75C6D3F2B1 /* DisplayRestoreCoalescerTests.swift */; };
 		110541198E57E0EDDDDBE939 /* LayoutStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAC24C02E957ACD05131042E /* LayoutStoreTests.swift */; };
 		BF4FBD4F17668E4BE0309CD9 /* SHA256Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F4F42669B7DF06A7EDDC548 /* SHA256Tests.swift */; };
 		FE0BEBB69A0BB48DB868684E /* WindowMatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C75633071EC6AF705543D7D /* WindowMatcherTests.swift */; };
@@ -79,6 +80,7 @@
 		2F8A6C14D9E04B73A1C5E7D2 /* WindowOperationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowOperationTests.swift; sourceTree = "<group>"; };
 		B99F0103E33F7FD786F49D1F /* CoordinateConverterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinateConverterTests.swift; sourceTree = "<group>"; };
 		16B9C5E5209D750510C2BDBE /* DisplayConfigKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayConfigKeyTests.swift; sourceTree = "<group>"; };
+		D5F9C2B38A014E75C6D3F2B1 /* DisplayRestoreCoalescerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DisplayRestoreCoalescerTests.swift; sourceTree = "<group>"; };
 		AAC24C02E957ACD05131042E /* LayoutStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutStoreTests.swift; sourceTree = "<group>"; };
 		9F4F42669B7DF06A7EDDC548 /* SHA256Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SHA256Tests.swift; sourceTree = "<group>"; };
 		5C75633071EC6AF705543D7D /* WindowMatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowMatcherTests.swift; sourceTree = "<group>"; };
@@ -169,6 +171,7 @@
 			children = (
 				B99F0103E33F7FD786F49D1F /* CoordinateConverterTests.swift */,
 				16B9C5E5209D750510C2BDBE /* DisplayConfigKeyTests.swift */,
+				D5F9C2B38A014E75C6D3F2B1 /* DisplayRestoreCoalescerTests.swift */,
 				AAC24C02E957ACD05131042E /* LayoutStoreTests.swift */,
 				9F4F42669B7DF06A7EDDC548 /* SHA256Tests.swift */,
 				5C75633071EC6AF705543D7D /* WindowMatcherTests.swift */,
@@ -274,6 +277,7 @@
 				9C3B7E51A0D64F28B6A4C1E5 /* WindowOperationTests.swift in Sources */,
 				B471E60FA2382D9BDB7E2239 /* CoordinateConverterTests.swift in Sources */,
 				098D899CA0BA883EF73663E3 /* DisplayConfigKeyTests.swift in Sources */,
+				C4E8B1A27F903D64B5C2E1A0 /* DisplayRestoreCoalescerTests.swift in Sources */,
 				110541198E57E0EDDDDBE939 /* LayoutStoreTests.swift in Sources */,
 				BF4FBD4F17668E4BE0309CD9 /* SHA256Tests.swift in Sources */,
 				FE0BEBB69A0BB48DB868684E /* WindowMatcherTests.swift in Sources */,
@@ -373,7 +377,7 @@
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -382,7 +386,7 @@
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
@@ -406,13 +410,13 @@
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -435,7 +439,7 @@
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -444,7 +448,7 @@
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
@@ -480,13 +484,13 @@
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
@@ -521,7 +525,7 @@
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
@@ -530,7 +534,7 @@
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
@@ -564,13 +568,13 @@
 				CODE_SIGNING_REQUIRED = NO;
 				DEVELOPMENT_TEAM = "";
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.1.1;
+				MARKETING_VERSION = 1.1.2;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
