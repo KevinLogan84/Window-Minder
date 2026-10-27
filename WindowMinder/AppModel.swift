@@ -638,18 +638,30 @@ final class AccessibilityChangeObserver: NSObject {
     private static weak var current: AccessibilityChangeObserver?
     var onChange: (@MainActor () -> Void)?
 
+    /// `#selector` needs the Objective-C runtime. Linux typechecks the method and uses the same selector name.
+    private static var accessibilityAPISelector: Selector {
+        #if canImport(ObjectiveC)
+        #selector(handleAccessibilityAPINotification(_:))
+        #else
+        Selector("handleAccessibilityAPINotification:")
+        #endif
+    }
+
     func start() {
         Self.current = self
         DistributedNotificationCenter.default().addObserver(
             self,
-            selector: #selector(handleAccessibilityAPINotification(_:)),
+            selector: Self.accessibilityAPISelector,
             name: Notification.Name("com.apple.accessibility.api"),
             object: nil,
             suspensionBehavior: .deliverImmediately
         )
     }
 
-    @objc nonisolated func handleAccessibilityAPINotification(_ notification: Notification) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated func handleAccessibilityAPINotification(_ notification: Notification) {
         let onMain = Thread.isMainThread
         accessibilityLogger.info(
             "Accessibility notification received onMain=\(onMain, privacy: .public); rechecking now, after 0.5s, and after 2s"

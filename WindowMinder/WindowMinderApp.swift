@@ -1,10 +1,12 @@
 import SwiftUI
 
+#if !os(Linux)
 @main
+#endif
 struct WindowMinderApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    var body: some Scene {
+    @SceneBuilder var body: some Scene {
         // Declared before Settings so this scene captures the real openSettings
         // action. The window is kept off-screen by SettingsActionHost.
         Window(LocalizedStringKey(SettingsActionHost.sceneTitle), id: SettingsActionHost.sceneID) {

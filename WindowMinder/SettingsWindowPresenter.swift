@@ -163,8 +163,8 @@ private final class SettingsHostView: NSView {
         Self.scheduleHide(of: self)
     }
 
-    override func viewWillMove(to newWindow: NSWindow?) {
-        super.viewWillMove(to: newWindow)
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
         Self.hide(newWindow)
     }
 

@@ -78,6 +78,14 @@ final class SettingsWindowPlannerTests: XCTestCase {
         )
     }
 
+    /// On Linux the package compiles `WindowMinder/*.swift` into this module.
+    /// The presenter entry point stays on the main actor, so this only names the type.
+    func testSettingsPresenterIsTypecheckedOnLinux() {
+        #if os(Linux)
+        XCTAssertNotNil(SettingsWindowPresenter.self as Any.Type)
+        #endif
+    }
+
     private func candidate(
         identifier: String? = nil,
         title: String,

@@ -5,7 +5,7 @@ struct PreferencesView: View {
     @Environment(AppModel.self) private var model
     @ScaledMetric(relativeTo: .body) private var rowHeight = 36
 
-    var body: some View {
+    @ViewBuilder var body: some View {
         @Bindable var model = model
 
         Form {

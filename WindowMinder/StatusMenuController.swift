@@ -14,6 +14,80 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private var rebuilding = false
     private var menuOpen = false
 
+    /// `#selector` needs the Objective-C runtime. Linux typechecks these methods and uses the same selector names.
+    private enum MenuAction {
+        static var openAccessibilitySettings: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.openAccessibilitySettings(_:))
+            #else
+            Selector("openAccessibilitySettings:")
+            #endif
+        }
+        static var storeWindows: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.storeWindows(_:))
+            #else
+            Selector("storeWindows:")
+            #endif
+        }
+        static var restoreWindows: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.restoreWindows(_:))
+            #else
+            Selector("restoreWindows:")
+            #endif
+        }
+        static var toggleAutoRestore: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.toggleAutoRestore(_:))
+            #else
+            Selector("toggleAutoRestore:")
+            #endif
+        }
+        static var toggleLogin: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.toggleLogin(_:))
+            #else
+            Selector("toggleLogin:")
+            #endif
+        }
+        static var openSettingsWindow: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.openSettingsWindow(_:))
+            #else
+            Selector("openSettingsWindow:")
+            #endif
+        }
+        static var quit: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.quit(_:))
+            #else
+            Selector("quit:")
+            #endif
+        }
+        static var deleteSavedLayout: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.deleteSavedLayout(_:))
+            #else
+            Selector("deleteSavedLayout:")
+            #endif
+        }
+        static var removeIgnored: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.removeIgnored(_:))
+            #else
+            Selector("removeIgnored:")
+            #endif
+        }
+        static var ignoreFrontmost: Selector {
+            #if canImport(ObjectiveC)
+            #selector(StatusMenuController.ignoreFrontmost(_:))
+            #else
+            Selector("ignoreFrontmost:")
+            #endif
+        }
+    }
+
     init(model: AppModel) {
         self.model = model
         super.init()
@@ -32,21 +106,30 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         trackIcon()
     }
 
-    @objc nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             controller.prepare(menu)
         }
     }
 
-    @objc nonisolated func menuWillOpen(_ menu: NSMenu) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated func menuWillOpen(_ menu: NSMenu) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self, menu === controller.menu else { return }
             controller.menuOpen = true
         }
     }
 
-    @objc nonisolated func menuDidClose(_ menu: NSMenu) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated func menuDidClose(_ menu: NSMenu) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self, menu === controller.menu else { return }
             controller.menuOpen = false
@@ -77,14 +160,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if AccessibilityTrustPolling.showsAccessDenied(isTrusted: model.accessibilityTrusted) {
             menu.addItem(actionItem(
                 AccessibilityMenuCopy.accessNeeded,
-                action: #selector(openAccessibilitySettings(_:))
+                action: Self.MenuAction.openAccessibilitySettings
             ))
             menu.addItem(.separator())
         }
 
         menu.addItem(label(model.displaySummary))
-        menu.addItem(actionItem("Store Windows Now", action: #selector(storeWindows(_:)), enabled: actionsAllowed))
-        menu.addItem(actionItem("Restore Windows Now", action: #selector(restoreWindows(_:)), enabled: actionsAllowed))
+        menu.addItem(actionItem("Store Windows Now", action: Self.MenuAction.storeWindows, enabled: actionsAllowed))
+        menu.addItem(actionItem("Restore Windows Now", action: Self.MenuAction.restoreWindows, enabled: actionsAllowed))
         if let statusMessage = model.statusMessage, !statusMessage.isEmpty {
             menu.addItem(label(statusMessage))
         }
@@ -95,7 +178,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         menu.addItem(actionItem(
             "Auto-Restore",
-            action: #selector(toggleAutoRestore(_:)),
+            action: Self.MenuAction.toggleAutoRestore,
             state: model.autoRestore ? .on : .off
         ))
         menu.items.last?.toolTip = "Restores the saved layout when a dock is connected or disconnected, and after the Mac wakes or logs in."
@@ -103,11 +186,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if LoginItemPresentation.showsToggle(model.loginState) {
             menu.addItem(actionItem(
                 model.loginTitle,
-                action: #selector(toggleLogin(_:)),
+                action: Self.MenuAction.toggleLogin,
                 state: LoginItemPresentation.isEnabled(model.loginState) ? .on : .off
             ))
         } else {
-            menu.addItem(actionItem(model.loginTitle, action: #selector(toggleLogin(_:))))
+            menu.addItem(actionItem(model.loginTitle, action: Self.MenuAction.toggleLogin))
         }
         if let loginMessage = model.loginMessage, !loginMessage.isEmpty {
             menu.addItem(label(loginMessage))
@@ -115,8 +198,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         menu.addItem(ignoredAppsItem())
         menu.addItem(.separator())
-        menu.addItem(actionItem(SettingsWindowPlanner.menuTitle, action: #selector(openSettingsWindow(_:))))
-        menu.addItem(actionItem("Quit Window Minder", action: #selector(quit(_:))))
+        menu.addItem(actionItem(SettingsWindowPlanner.menuTitle, action: Self.MenuAction.openSettingsWindow))
+        menu.addItem(actionItem("Quit Window Minder", action: Self.MenuAction.quit))
     }
 
     private func savedLayoutsItem() -> NSMenuItem {
@@ -132,7 +215,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 layoutMenu.autoenablesItems = false
                 layoutMenu.addItem(actionItem(
                     "Delete",
-                    action: #selector(deleteSavedLayout(_:)),
+                    action: Self.MenuAction.deleteSavedLayout,
                     represented: layout.key
                 ))
                 layoutItem.submenu = layoutMenu
@@ -153,13 +236,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             for bundleID in model.ignoredBundleIDs {
                 submenu.addItem(actionItem(
                     "Remove \(model.appName(for: bundleID))",
-                    action: #selector(removeIgnored(_:)),
+                    action: Self.MenuAction.removeIgnored,
                     represented: bundleID
                 ))
             }
         }
         submenu.addItem(.separator())
-        submenu.addItem(actionItem("Ignore Frontmost App", action: #selector(ignoreFrontmost(_:))))
+        submenu.addItem(actionItem("Ignore Frontmost App", action: Self.MenuAction.ignoreFrontmost))
         item.submenu = submenu
         return item
     }
@@ -214,35 +297,50 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         button.setAccessibilityLabel(description)
     }
 
-    @objc nonisolated private func storeWindows(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func storeWindows(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             controller.model.storeNow()
         }
     }
 
-    @objc nonisolated private func restoreWindows(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func restoreWindows(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             controller.model.restoreNow()
         }
     }
 
-    @objc nonisolated private func toggleAutoRestore(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func toggleAutoRestore(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             controller.model.autoRestore.toggle()
         }
     }
 
-    @objc nonisolated private func toggleLogin(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func toggleLogin(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             controller.model.toggleLoginItem()
         }
     }
 
-    @objc nonisolated private func openAccessibilitySettings(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func openAccessibilitySettings(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             controller.model.openAccessibilitySettings()
@@ -251,7 +349,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     /// The status item is still tracking the menu on this click. A window opened
     /// before the menu closes loses key status, so the open runs on a later turn.
-    @objc nonisolated private func openSettingsWindow(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func openSettingsWindow(_ sender: NSMenuItem) {
         DispatchQueue.main.async { [weak self] in
             guard let controller = self else { return }
             MainActor.assumeIsolated {
@@ -278,18 +379,27 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         model.openSettingsWindow()
     }
 
-    @objc nonisolated private func quit(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func quit(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { NSApp.terminate(nil) }
     }
 
-    @objc nonisolated private func ignoreFrontmost(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func ignoreFrontmost(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             controller.model.ignoreFrontmost()
         }
     }
 
-    @objc nonisolated private func removeIgnored(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func removeIgnored(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             guard let bundleID = sender.representedObject as? String else { return }
@@ -297,7 +407,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc nonisolated private func deleteSavedLayout(_ sender: NSMenuItem) {
+    #if canImport(ObjectiveC)
+    @objc
+    #endif
+    nonisolated private func deleteSavedLayout(_ sender: NSMenuItem) {
         MainActor.assumeIsolated { [weak self] in
             guard let controller = self else { return }
             guard let key = sender.representedObject as? String else { return }
