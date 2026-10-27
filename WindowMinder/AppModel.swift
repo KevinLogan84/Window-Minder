@@ -281,16 +281,8 @@ final class AppModel {
         accessibility.openSettings()
     }
 
-    func openPreferences() {
-        NSApp.setActivationPolicy(.accessory)
-        NSApp.activate()
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        DispatchQueue.main.async {
-            NSApp.setActivationPolicy(.accessory)
-            guard let window = NSApp.windows.first(where: { $0.canBecomeKey && $0.isVisible }) else { return }
-            window.collectionBehavior.insert(.moveToActiveSpace)
-            window.makeKeyAndOrderFront(nil)
-        }
+    func openSettingsWindow() {
+        SettingsWindowPresenter.openFromStatusItem()
     }
 
     func appName(for bundleID: String) -> String {

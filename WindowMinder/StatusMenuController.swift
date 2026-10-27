@@ -115,7 +115,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         menu.addItem(ignoredAppsItem())
         menu.addItem(.separator())
-        menu.addItem(actionItem("Preferences…", action: #selector(openPreferences(_:))))
+        menu.addItem(actionItem(SettingsWindowPlanner.menuTitle, action: #selector(openSettingsWindow(_:))))
         menu.addItem(actionItem("Quit Window Minder", action: #selector(quit(_:))))
     }
 
@@ -249,11 +249,33 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
     }
 
-    @objc nonisolated private func openPreferences(_ sender: NSMenuItem) {
-        MainActor.assumeIsolated { [weak self] in
+    /// The status item is still tracking the menu on this click. A window opened
+    /// before the menu closes loses key status, so the open runs on a later turn.
+    @objc nonisolated private func openSettingsWindow(_ sender: NSMenuItem) {
+        DispatchQueue.main.async { [weak self] in
             guard let controller = self else { return }
-            controller.model.openPreferences()
+            MainActor.assumeIsolated {
+                controller.openSettingsWindowAfterMenuCloses()
+            }
         }
+    }
+
+    private func openSettingsWindowAfterMenuCloses(attempt: Int = 0) {
+        if menuOpen {
+            menu.cancelTracking()
+            guard attempt < 5 else {
+                model.openSettingsWindow()
+                return
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let controller = self else { return }
+                MainActor.assumeIsolated {
+                    controller.openSettingsWindowAfterMenuCloses(attempt: attempt + 1)
+                }
+            }
+            return
+        }
+        model.openSettingsWindow()
     }
 
     @objc nonisolated private func quit(_ sender: NSMenuItem) {

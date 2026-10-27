@@ -85,5 +85,34 @@ struct PreferencesView: View {
         .formStyle(.grouped)
         .frame(minWidth: 520, minHeight: 480)
         .padding(8)
+        .background(SettingsWindowTitleEnforcer())
+    }
+}
+
+/// The Settings scene's title bar should say Settings, including after SwiftUI
+/// applies its own title when the window is created.
+private struct SettingsWindowTitleEnforcer: NSViewRepresentable {
+    func makeNSView(context: Context) -> SettingsWindowTitleView {
+        SettingsWindowTitleView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: SettingsWindowTitleView, context: Context) {
+        nsView.applyTitle()
+    }
+}
+
+@MainActor
+private final class SettingsWindowTitleView: NSView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        Self.applyTitle(to: window)
+    }
+
+    func applyTitle() {
+        Self.applyTitle(to: window)
+    }
+
+    private static func applyTitle(to window: NSWindow?) {
+        window?.title = SettingsWindowPlanner.windowTitle
     }
 }
