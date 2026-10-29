@@ -22,6 +22,8 @@ struct AXRestoreReport: Sendable {
     var summary: RestoreSummary
     var elapsedMilliseconds: Int
     var bundlesWithLiveWindows: [String]
+    /// Saved windows that were paired with a live window on this pass.
+    var matchedSaved: [WindowRecord]
 }
 
 /// Accessibility reads and writes. Each app element is used on one task.
@@ -114,13 +116,15 @@ enum AXWindowWork {
         )
         let elapsed = elapsedMilliseconds(since: started)
         let bundlesWithLiveWindows = results.filter(\.sawWindows).map(\.bundleIdentifier).sorted()
+        let matchedSaved = results.flatMap(\.matchedSaved)
         windowLogger.info(
-            "Restore elapsedMs=\(elapsed, privacy: .public) appsScanned=\(targets.count, privacy: .public) appsTimedOut=\(summary.unresponsiveAppCount, privacy: .public) restored=\(summary.restored, privacy: .public) skipped=\(summary.skipped, privacy: .public) failed=\(summary.failed, privacy: .public)"
+            "Restore elapsedMs=\(elapsed, privacy: .public) appsScanned=\(targets.count, privacy: .public) appsTimedOut=\(summary.unresponsiveAppCount, privacy: .public) restored=\(summary.restored, privacy: .public) skipped=\(summary.skipped, privacy: .public) failed=\(summary.failed, privacy: .public) matched=\(matchedSaved.count, privacy: .public)"
         )
         return AXRestoreReport(
             summary: summary,
             elapsedMilliseconds: elapsed,
-            bundlesWithLiveWindows: bundlesWithLiveWindows
+            bundlesWithLiveWindows: bundlesWithLiveWindows,
+            matchedSaved: matchedSaved
         )
     }
 
@@ -136,6 +140,7 @@ enum AXWindowWork {
         var failed: Int
         var timedOut: Bool
         var sawWindows: Bool
+        var matchedSaved: [WindowRecord]
     }
 
     private static func captureApp(_ target: ScanCandidate, primaryHeight: Double) -> AppCapture {
@@ -189,7 +194,8 @@ enum AXWindowWork {
                 skipped: skipped,
                 failed: 0,
                 timedOut: true,
-                sawWindows: false
+                sawWindows: false,
+                matchedSaved: []
             )
         case .windows(let elements):
             let attributes = elements.map(copyWindowAttributes)
@@ -260,14 +266,21 @@ enum AXWindowWork {
                 }
             }
             let eligible = savedForApp.filter { !ignoredBundleIdentifiers.contains($0.bundleIdentifier) }.count
-            skipped += max(eligible - matches.count, 0)
+            let notPresent = max(eligible - matches.count, 0)
+            if notPresent > 0 {
+                windowLogger.info(
+                    "Skipped \(notPresent, privacy: .public) windows not present yet bundle=\(target.bundleIdentifier, privacy: .public)"
+                )
+            }
+            skipped += notPresent
             return AppRestore(
                 bundleIdentifier: target.bundleIdentifier,
                 restored: restored,
                 skipped: skipped,
                 failed: failed,
                 timedOut: false,
-                sawWindows: !live.isEmpty
+                sawWindows: !live.isEmpty,
+                matchedSaved: matches.map(\.saved)
             )
         }
     }

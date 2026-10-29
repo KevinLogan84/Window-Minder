@@ -137,7 +137,29 @@ public enum WindowMatcher {
 
 public enum LateWindowRetry {
     public static let interval: TimeInterval = 1
-    public static let duration: TimeInterval = 15
+    public static let duration: TimeInterval = 30
+
+    /// Saved windows that were not matched on this pass. An app that already has
+    /// other windows still retries the ones that are not open yet. A matched
+    /// window, including one that could not be moved, is not returned.
+    public static func windowsToRetry(
+        saved: [WindowRecord],
+        matched: [WindowRecord],
+        ignoredBundleIdentifiers: Set<String> = []
+    ) -> [WindowRecord] {
+        let ignored = ignoredBundleIdentifiers.union([WindowMinderIdentity.bundleIdentifier])
+        var pool = matched
+        var retry: [WindowRecord] = []
+        for record in saved {
+            guard !record.bundleIdentifier.isEmpty, !ignored.contains(record.bundleIdentifier) else { continue }
+            if let index = pool.firstIndex(of: record) {
+                pool.remove(at: index)
+            } else {
+                retry.append(record)
+            }
+        }
+        return retry
+    }
 
     /// Saved apps that do not have a live window yet. Window Minder waits for these
     /// bundle ids to appear. It does not launch the apps, and a missing app is not a failed restore.

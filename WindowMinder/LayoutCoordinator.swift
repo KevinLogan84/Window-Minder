@@ -20,11 +20,12 @@ enum LayoutTiming {
 /// change, so that earlier snapshot is what gets written for the previous setup.
 ///
 /// Login, wake, screen wake, session unlock, and display reconfiguration share
-/// one debounce in `DisplayRestoreCoalescer`. Restore reads the layout from disk
-/// for the settled display key and retries apps that are not running yet. The
-/// snapshot taken at launch is the saved layout, not the positions macOS used
-/// before those apps opened. A pointer button that is held down defers that
-/// restore until the drag ends.
+/// one debounce in `DisplayRestoreCoalescer`. After a wake, a strict subset of
+/// the pre-wake screens waits for the missing display instead of applying the
+/// smaller layout. Restore reads the layout from disk for the settled display
+/// key and retries windows that are not open yet. The snapshot taken at launch
+/// is the saved layout, not the positions macOS used before those apps opened.
+/// A pointer button that is held down defers that restore until the drag ends.
 @MainActor
 final class LayoutCoordinator {
     var onStatus: @MainActor (String) -> Void = { _ in }
@@ -53,6 +54,11 @@ final class LayoutCoordinator {
     private var displayTask: Task<Void, Never>?
     private var launched = false
     private var coalescer = DisplayRestoreCoalescer()
+    /// Screens that were connected when this wake started. Frozen so a partial
+    /// restore cannot forget the setup we are waiting to complete.
+    private var wakeBaselineTokens: [String] = []
+    private var wakeBaselineHasLayout = false
+    private var wakeBaselineReady = false
     private static let dragRecheckInterval: TimeInterval = 0.2
     private static let screenIsUnlocked = Notification.Name("com.apple.screenIsUnlocked")
 
@@ -131,9 +137,9 @@ final class LayoutCoordinator {
         let targets = accessibility.scanTargets(ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers)
         let report = await AXWindowWork.capture(targets: targets, primaryHeight: height, trace: .store)
         let appCount = Set(report.windows.map(\.bundleIdentifier)).count
-        let existingCount: Int?
+        let existingLayout: SavedLayout?
         do {
-            existingCount = try savedWindowCount(for: configuration)
+            existingLayout = try savedLayout(for: configuration)
         } catch {
             layoutLogger.error(
                 "Could not read saved layouts before store: \(error.localizedDescription, privacy: .public)"
@@ -141,8 +147,9 @@ final class LayoutCoordinator {
             if report.windows.isEmpty {
                 return "No windows could be read. The saved layout was left unchanged."
             }
-            existingCount = nil
+            existingLayout = nil
         }
+        let existingCount = existingLayout?.windows.count
         let outcome = StoreOutcome.make(
             windowCount: report.windows.count,
             appCount: appCount,
@@ -162,15 +169,31 @@ final class LayoutCoordinator {
             )
             return outcome.message
         }
+        let prepared = LayoutOverwrite.prepareStore(
+            existing: existingLayout?.windows,
+            captured: report.windows
+        )
+        guard prepared.shouldSave else {
+            layoutLogger.error(
+                "Refused store that would replace \(existingCount ?? 0, privacy: .public) saved windows with \(report.windows.count, privacy: .public)"
+            )
+            return outcome.message
+        }
+        let summary = StoreSummary(
+            windowCount: report.windows.count,
+            appCount: appCount,
+            unresponsiveAppCount: report.appsTimedOut,
+            keptWindowCount: prepared.keptWindowCount
+        )
         layoutLogger.info(
-            "Store windows=\(report.windows.count, privacy: .public) apps=\(appCount, privacy: .public) appsScanned=\(report.appsScanned, privacy: .public) appsTimedOut=\(report.appsTimedOut, privacy: .public)"
+            "Store windows=\(report.windows.count, privacy: .public) apps=\(appCount, privacy: .public) appsScanned=\(report.appsScanned, privacy: .public) appsTimedOut=\(report.appsTimedOut, privacy: .public) kept=\(prepared.keptWindowCount, privacy: .public)"
         )
         let layout = SavedLayout(
             version: SavedLayout.currentVersion,
             key: configuration.key,
             savedAt: Date(),
             displays: configuration.displays,
-            windows: report.windows
+            windows: prepared.windows
         )
         do {
             try store.save(layout)
@@ -182,14 +205,13 @@ final class LayoutCoordinator {
             snapshot = Snapshot(configuration: configuration, windows: layout.windows, capturedAt: layout.savedAt)
         }
         onLayoutsChanged()
-        return outcome.message
+        return summary.message
     }
 
-    /// Windows already saved for this display setup, including a legacy file whose key
-    /// no longer matches. Nil when nothing is saved. Throws only if the folder cannot be read.
-    private func savedWindowCount(for configuration: DisplayConfiguration) throws -> Int? {
-        let layouts = try store.list()
-        return LayoutCatalog.layout(for: configuration, in: layouts)?.windows.count
+    /// The layout already saved for this display setup, including a legacy file whose
+    /// key no longer matches. Nil when nothing is saved. Throws only if the folder cannot be read.
+    private func savedLayout(for configuration: DisplayConfiguration) throws -> SavedLayout? {
+        LayoutCatalog.layout(for: configuration, in: try store.list())
     }
 
     /// `announceWhenIdle` is for an explicit Restore. Automatic restore stays quiet when
@@ -261,15 +283,21 @@ final class LayoutCoordinator {
             restored += report.summary.restored
             failed += report.summary.failed
             unresponsive = report.summary.unresponsiveAppCount
-            let awaiting = LateWindowRetry.bundlesAwaitingWindows(
-                saved: placed,
-                liveBundleIdentifiers: Set(report.bundlesWithLiveWindows),
+            let retry = LateWindowRetry.windowsToRetry(
+                saved: pending,
+                matched: report.matchedSaved,
                 ignoredBundleIdentifiers: ignored
             )
             let elapsed = Date().timeIntervalSince(started)
-            guard LateWindowRetry.shouldRetry(awaiting: awaiting, elapsed: elapsed) else { break }
-            pending = placed.filter { awaiting.contains($0.bundleIdentifier) }
+            guard LateWindowRetry.shouldRetry(
+                awaiting: retry.map(\.bundleIdentifier),
+                elapsed: elapsed
+            ) else { break }
+            pending = retry
             if pending.isEmpty { break }
+            layoutLogger.info(
+                "Retrying \(pending.count, privacy: .public) skipped windows elapsed=\(elapsed, privacy: .public)"
+            )
             do {
                 try await Task.sleep(nanoseconds: UInt64(LateWindowRetry.interval * 1_000_000_000))
             } catch {
@@ -378,11 +406,25 @@ final class LayoutCoordinator {
     }
 
     private func noteDisplaySignal(_ signal: DisplayRestoreCoalescer.Signal) {
+        if signal.waitsForMissingDisplays, !wakeBaselineReady, let snapshot, !snapshot.configuration.displays.isEmpty {
+            wakeBaselineTokens = snapshot.configuration.displays.map { DisplayIdentity.token(for: $0) }
+            wakeBaselineHasLayout = hasSavedLayout(for: snapshot.configuration)
+            wakeBaselineReady = true
+            layoutLogger.info(
+                "Pre-wake setup displays=\(self.wakeBaselineTokens.count, privacy: .public) hasLayout=\(self.wakeBaselineHasLayout, privacy: .public)"
+            )
+        }
+        let name = signal.logName
         switch coalescer.note(signal, at: monotonicNow()) {
         case .arm(let generation):
+            layoutLogger.info(
+                "Observed \(name, privacy: .public) armed generation=\(generation, privacy: .public)"
+            )
             beginQuietWait(generation: generation)
-        case .coalesced:
-            break
+        case .coalesced(let generation):
+            layoutLogger.info(
+                "Observed \(name, privacy: .public) coalesced generation=\(generation, privacy: .public)"
+            )
         }
     }
 
@@ -455,6 +497,19 @@ final class LayoutCoordinator {
         let previous = snapshot
         let keyChanged = previous?.configuration.key != newConfiguration.key
         let autoRestore = settings().autoRestore
+        let currentTokens = newConfiguration.displays.map { DisplayIdentity.token(for: $0) }
+        let preWakeTokens: [String]
+        let preWakeHasLayout: Bool
+        if wakeBaselineReady {
+            preWakeTokens = wakeBaselineTokens
+            preWakeHasLayout = wakeBaselineHasLayout
+        } else if let previous, !previous.configuration.displays.isEmpty {
+            preWakeTokens = previous.configuration.displays.map { DisplayIdentity.token(for: $0) }
+            preWakeHasLayout = hasSavedLayout(for: previous.configuration)
+        } else {
+            preWakeTokens = []
+            preWakeHasLayout = false
+        }
         let decision = coalescer.evaluate(
             generation,
             DisplayRestoreCoalescer.Probe(
@@ -463,28 +518,57 @@ final class LayoutCoordinator {
                 hasSavedLayout: autoRestore && hasSavedLayout(for: newConfiguration),
                 dragInProgress: PointerDrag.isInProgress(pressedMouseButtons: NSEvent.pressedMouseButtons),
                 keyChanged: keyChanged,
-                now: monotonicNow()
+                now: monotonicNow(),
+                currentDisplayTokens: currentTokens,
+                preWakeDisplayTokens: preWakeTokens,
+                preWakeHasSavedLayout: preWakeHasLayout
             )
         )
+        logDecision(decision)
         switch decision {
         case .waitForDisplays(let generation):
             beginQuietWait(generation: generation)
         case .deferUntilDragEnds(let generation):
-            layoutLogger.info("Deferring layout restore until the pointer button is up")
             watchForDragEnd(generation: generation)
         case .skip:
+            clearWakeBaseline()
             let notes = savePreviousLayoutIfNeeded(previous: previous, current: newConfiguration)
             if !notes.isEmpty {
                 onStatus(notes.joined(separator: " "))
             }
             resumeSnapshots(for: newConfiguration)
         case .restore:
+            clearWakeBaseline()
             let notes = savePreviousLayoutIfNeeded(previous: previous, current: newConfiguration)
             if !notes.isEmpty {
                 onStatus(notes.joined(separator: " "))
             }
             startSettledRestore(configuration: newConfiguration, notes: notes)
         }
+    }
+
+    private func logDecision(_ decision: DisplayRestoreCoalescer.Decision) {
+        let action: String
+        switch decision {
+        case .restore(let key, let generation):
+            action = "restore key=\(key) generation=\(generation)"
+        case .deferUntilDragEnds(let generation):
+            action = "defer generation=\(generation)"
+        case .waitForDisplays(let generation):
+            action = "wait generation=\(generation)"
+        case .skip:
+            action = "skip"
+        }
+        let reason = coalescer.lastDecisionReason.description
+        layoutLogger.info(
+            "Decision \(action, privacy: .public) reason=\(reason, privacy: .public)"
+        )
+    }
+
+    private func clearWakeBaseline() {
+        wakeBaselineReady = false
+        wakeBaselineTokens = []
+        wakeBaselineHasLayout = false
     }
 
     private func watchForDragEnd(generation: Int) {
@@ -573,11 +657,12 @@ final class LayoutCoordinator {
             return []
         }
         let layouts = (try? store.list()) ?? []
-        let existingCount = LayoutCatalog.layout(for: previous.configuration, in: layouts)?.windows.count
-        guard LayoutOverwrite.shouldReplaceSavedLayout(
-            existingWindowCount: existingCount,
-            capturedWindowCount: previous.windows.count
-        ) else {
+        let existing = LayoutCatalog.layout(for: previous.configuration, in: layouts)
+        let prepared = LayoutOverwrite.prepareStore(
+            existing: existing?.windows,
+            captured: previous.windows
+        )
+        guard prepared.shouldSave else {
             return []
         }
         let layout = SavedLayout(
@@ -585,7 +670,7 @@ final class LayoutCoordinator {
             key: previous.configuration.key,
             savedAt: previous.capturedAt,
             displays: previous.configuration.displays,
-            windows: previous.windows
+            windows: prepared.windows
         )
         do {
             try store.save(layout)

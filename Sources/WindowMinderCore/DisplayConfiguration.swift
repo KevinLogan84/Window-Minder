@@ -149,9 +149,11 @@ public enum DisplayRestoreTiming {
     /// long has passed. Wake and `screensDidWake` often both fire. A different
     /// display key is not held back.
     public static let sameSetupCoalesce: TimeInterval = 4
-    /// If the screens are still empty when the first quiet period ends, a wake
-    /// keeps its "restore even if the key is unchanged" status until this deadline.
-    public static let wakeLayoutWindow: TimeInterval = 8
+    /// After a system wake, display wake, or unlock, wait this long for a screen
+    /// that is still coming back. A strict subset of the pre-wake setup is not
+    /// applied until the deadline. An empty screen list uses the same deadline.
+    /// About 90 seconds: an external panel can enumerate well after the built-in.
+    public static let wakeLayoutWindow: TimeInterval = 90
 }
 
 public enum DisplayRestorePolicy {
@@ -174,6 +176,21 @@ public enum PointerDrag {
     /// A window drag holds a mouse button down. `NSEvent.pressedMouseButtons` is the mask.
     public static func isInProgress(pressedMouseButtons: Int) -> Bool {
         pressedMouseButtons != 0
+    }
+}
+
+public enum DisplaySubset {
+    /// Every current token occurs in `earlier`, and `earlier` still has at least one
+    /// token left over. Order does not matter. An empty current set is a strict
+    /// subset of a non-empty earlier set.
+    public static func isStrictSubset(current: [String], of earlier: [String]) -> Bool {
+        guard earlier.count > current.count else { return false }
+        var remaining = earlier
+        for token in current {
+            guard let index = remaining.firstIndex(of: token) else { return false }
+            remaining.remove(at: index)
+        }
+        return true
     }
 }
 
@@ -208,6 +225,32 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
                 return false
             }
         }
+
+        /// System wake, display wake, unlock, and launch can see a strict subset of
+        /// the previous screens while an external panel is still enumerating.
+        public var waitsForMissingDisplays: Bool {
+            switch self {
+            case .launch, .wake, .screensWake, .sessionUnlock:
+                return true
+            case .displayChange:
+                return false
+            }
+        }
+
+        public var logName: String {
+            switch self {
+            case .launch:
+                return "wake signal launch"
+            case .wake:
+                return "wake signal system wake"
+            case .screensWake:
+                return "wake signal screens wake"
+            case .sessionUnlock:
+                return "wake signal unlock"
+            case .displayChange:
+                return "display change"
+            }
+        }
     }
 
     public enum Schedule: Equatable, Sendable {
@@ -224,6 +267,12 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
         public var dragInProgress: Bool
         public var keyChanged: Bool
         public var now: TimeInterval
+        /// Identity tokens for the screens connected at this decision.
+        public var currentDisplayTokens: [String]
+        /// Identity tokens for the setup that was connected before this wake.
+        public var preWakeDisplayTokens: [String]
+        /// True when that pre-wake setup has a saved layout worth waiting for.
+        public var preWakeHasSavedLayout: Bool
 
         public init(
             autoRestore: Bool,
@@ -231,7 +280,10 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
             hasSavedLayout: Bool,
             dragInProgress: Bool,
             keyChanged: Bool,
-            now: TimeInterval
+            now: TimeInterval,
+            currentDisplayTokens: [String] = [],
+            preWakeDisplayTokens: [String] = [],
+            preWakeHasSavedLayout: Bool = false
         ) {
             self.autoRestore = autoRestore
             self.displayKey = displayKey
@@ -239,6 +291,53 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
             self.dragInProgress = dragInProgress
             self.keyChanged = keyChanged
             self.now = now
+            self.currentDisplayTokens = currentDisplayTokens
+            self.preWakeDisplayTokens = preWakeDisplayTokens
+            self.preWakeHasSavedLayout = preWakeHasSavedLayout
+        }
+    }
+
+    public enum DecisionReason: Equatable, Sendable, CustomStringConvertible {
+        case staleGeneration
+        case autoRestoreDisabled
+        case waitingForDisplays
+        case waitingForMissingDisplay
+        case noDisplays
+        case noSavedLayout
+        case sameSetupCoalesced
+        case unchangedLayout
+        case dragInProgress
+        case wakeRestore
+        case keyChanged
+        case subsetTimedOut
+
+        public var description: String {
+            switch self {
+            case .staleGeneration:
+                return "stale generation"
+            case .autoRestoreDisabled:
+                return "auto-restore is off"
+            case .waitingForDisplays:
+                return "waiting for displays"
+            case .waitingForMissingDisplay:
+                return "current displays are a strict subset of the pre-wake setup"
+            case .noDisplays:
+                return "no displays before the wake window ended"
+            case .noSavedLayout:
+                return "no saved layout"
+            case .sameSetupCoalesced:
+                return "this setup was just restored"
+            case .unchangedLayout:
+                return "display setup is unchanged"
+            case .dragInProgress:
+                return "pointer button is down"
+            case .wakeRestore:
+                return "wake restores this setup"
+            case .keyChanged:
+                return "display setup changed"
+            case .subsetTimedOut:
+                return "missing display did not return before the wake window ended"
+            }
         }
     }
 
@@ -270,6 +369,10 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
     private var satisfiedKey: String?
     private var satisfiedUntil: TimeInterval = -1
     private var restoreUnchangedUntil: TimeInterval = -1
+    /// Deadline for waiting out a strict subset of the pre-wake screens.
+    private var missingDisplayWaitUntil: TimeInterval = -1
+    /// Why the most recent `evaluate` returned what it did.
+    public private(set) var lastDecisionReason: DecisionReason = .staleGeneration
 
     public init() {
         generation = 0
@@ -283,6 +386,9 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
                 satisfiedKey = nil
             }
             restoreUnchangedUntil = max(restoreUnchangedUntil, now + DisplayRestoreTiming.wakeLayoutWindow)
+        }
+        if signal.waitsForMissingDisplays {
+            missingDisplayWaitUntil = max(missingDisplayWaitUntil, now + DisplayRestoreTiming.wakeLayoutWindow)
         }
         switch phase {
         case .restoring:
@@ -316,36 +422,56 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
     }
 
     /// Decide once the displays have been quiet. A mismatched generation is ignored.
+    ///
+    /// A wake, screen wake, or unlock whose screens are a strict subset of the
+    /// pre-wake setup waits out `DisplayRestoreTiming.wakeLayoutWindow` instead of
+    /// applying the smaller layout. The smaller layout is the fallback when the
+    /// missing screen never returns.
     public mutating func evaluate(_ generation: Int, _ probe: Probe) -> Decision {
-        guard generation == self.generation else { return .skip }
+        guard generation == self.generation else {
+            lastDecisionReason = .staleGeneration
+            return .skip
+        }
         let phaseWake: Bool
         switch phase {
         case .waiting(let wakeLike), .deferred(let wakeLike):
             phaseWake = wakeLike
         case .idle, .restoring:
+            lastDecisionReason = .staleGeneration
             return .skip
         }
         let wakeLike = phaseWake || (satisfiedKey == nil && probe.now <= restoreUnchangedUntil)
 
         guard probe.autoRestore else {
             phase = .idle
+            lastDecisionReason = .autoRestoreDisabled
             return .skip
+        }
+        if shouldWaitForMissingDisplays(probe) {
+            self.generation += 1
+            phase = .waiting(wakeLike: true)
+            lastDecisionReason = .waitingForMissingDisplay
+            return .waitForDisplays(generation: self.generation)
         }
         guard let key = probe.displayKey, !key.isEmpty else {
             if probe.now <= restoreUnchangedUntil {
                 self.generation += 1
                 phase = .waiting(wakeLike: true)
+                lastDecisionReason = .waitingForDisplays
                 return .waitForDisplays(generation: self.generation)
             }
             phase = .idle
+            lastDecisionReason = .noDisplays
             return .skip
         }
         guard probe.hasSavedLayout else {
             phase = .idle
+            lastDecisionReason = .noSavedLayout
             return .skip
         }
         if satisfiedKey == key, probe.now <= satisfiedUntil {
             phase = .idle
+            lastDecisionReason = .sameSetupCoalesced
             return .skip
         }
         let allowed = DisplayRestorePolicy.shouldRestore(
@@ -356,16 +482,45 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
         )
         guard allowed else {
             phase = .idle
+            lastDecisionReason = .unchangedLayout
             return .skip
         }
         if probe.dragInProgress {
             phase = .deferred(wakeLike: wakeLike)
+            lastDecisionReason = .dragInProgress
             return .deferUntilDragEnds(generation: generation)
         }
         phase = .restoring(key: key)
         satisfiedKey = key
         satisfiedUntil = probe.now + DisplayRestoreTiming.sameSetupCoalesce
+        if subsetWaitTimedOut(probe) {
+            lastDecisionReason = .subsetTimedOut
+        } else if wakeLike && !probe.keyChanged {
+            lastDecisionReason = .wakeRestore
+        } else {
+            lastDecisionReason = .keyChanged
+        }
         return .restore(key: key, generation: generation)
+    }
+
+    /// True while a wake window is open and the connected screens are a proper
+    /// subset of the pre-wake setup that has a saved layout.
+    private func shouldWaitForMissingDisplays(_ probe: Probe) -> Bool {
+        guard probe.preWakeHasSavedLayout else { return false }
+        guard missingDisplayWaitUntil >= 0, probe.now <= missingDisplayWaitUntil else { return false }
+        return DisplaySubset.isStrictSubset(
+            current: probe.currentDisplayTokens,
+            of: probe.preWakeDisplayTokens
+        )
+    }
+
+    private func subsetWaitTimedOut(_ probe: Probe) -> Bool {
+        guard missingDisplayWaitUntil >= 0, probe.now > missingDisplayWaitUntil else { return false }
+        guard probe.preWakeHasSavedLayout else { return false }
+        return DisplaySubset.isStrictSubset(
+            current: probe.currentDisplayTokens,
+            of: probe.preWakeDisplayTokens
+        )
     }
 
     /// Drop a display-change follow-up when the settled key matches the restore

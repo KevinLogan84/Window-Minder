@@ -214,11 +214,18 @@ public struct StoreSummary: Equatable, Sendable {
     public var windowCount: Int
     public var appCount: Int
     public var unresponsiveAppCount: Int
+    public var keptWindowCount: Int
 
-    public init(windowCount: Int, appCount: Int, unresponsiveAppCount: Int) {
+    public init(
+        windowCount: Int,
+        appCount: Int,
+        unresponsiveAppCount: Int,
+        keptWindowCount: Int = 0
+    ) {
         self.windowCount = windowCount
         self.appCount = appCount
         self.unresponsiveAppCount = unresponsiveAppCount
+        self.keptWindowCount = keptWindowCount
     }
 
     public var message: String {
@@ -232,6 +239,10 @@ public struct StoreSummary: Equatable, Sendable {
                 plural: "unresponsive apps"
             )
             text += ". Skipped \(skipped)"
+        }
+        if keptWindowCount > 0 {
+            let kept = CountNoun.phrase(keptWindowCount, singular: "window", plural: "windows")
+            text += ". Kept \(kept) that were not open"
         }
         return text
     }
@@ -302,14 +313,83 @@ public enum SnapshotMerge {
     }
 }
 
+public struct LayoutWindowMergeResult: Equatable, Sendable {
+    public var windows: [WindowRecord]
+    public var keptWindowCount: Int
+
+    public init(windows: [WindowRecord], keptWindowCount: Int) {
+        self.windows = windows
+        self.keptWindowCount = keptWindowCount
+    }
+}
+
+public enum LayoutWindowMerge {
+    /// Open windows replace the saved records they match. Saved windows that are
+    /// not open stay, so a smaller capture does not wipe a fuller layout.
+    public static func keepingClosed(saved: [WindowRecord], captured: [WindowRecord]) -> LayoutWindowMergeResult {
+        let matches = WindowMatcher.match(saved: saved, live: captured)
+        var matched = matches.map(\.saved)
+        var kept: [WindowRecord] = []
+        for record in saved {
+            if record.bundleIdentifier.isEmpty || record.bundleIdentifier == WindowMinderIdentity.bundleIdentifier {
+                continue
+            }
+            if let index = matched.firstIndex(of: record) {
+                matched.remove(at: index)
+                continue
+            }
+            kept.append(record)
+        }
+        return LayoutWindowMergeResult(windows: captured + kept, keptWindowCount: kept.count)
+    }
+}
+
 public enum LayoutOverwrite {
-    /// A capture with no windows must not erase a layout that still has windows.
-    /// That includes an explicit Store: a failed Accessibility read looks like zero windows
-    /// and would replace a real layout. A missing layout, or one that is already empty, can be replaced.
+    public struct PreparedStore: Equatable, Sendable {
+        public var windows: [WindowRecord]
+        public var keptWindowCount: Int
+        public var shouldSave: Bool
+
+        public init(windows: [WindowRecord], keptWindowCount: Int, shouldSave: Bool) {
+            self.windows = windows
+            self.keptWindowCount = keptWindowCount
+            self.shouldSave = shouldSave
+        }
+    }
+
+    /// A capture must not replace a saved layout that has more windows.
+    /// Zero windows never erase a layout that still has windows. Fewer windows
+    /// are merged, keeping saved entries that are not open. A missing layout,
+    /// an empty one, or a capture with at least as many windows can be replaced.
     public static func shouldReplaceSavedLayout(existingWindowCount: Int?, capturedWindowCount: Int) -> Bool {
-        if capturedWindowCount > 0 { return true }
         guard let existingWindowCount else { return true }
-        return existingWindowCount == 0
+        if existingWindowCount == 0 { return true }
+        return capturedWindowCount >= existingWindowCount
+    }
+
+    /// The windows to write for an explicit Store. A smaller capture keeps the
+    /// saved entries that are not open instead of replacing the file.
+    public static func prepareStore(existing: [WindowRecord]?, captured: [WindowRecord]) -> PreparedStore {
+        let existingWindows = existing ?? []
+        if !shouldReplaceSavedLayout(
+            existingWindowCount: existing?.count,
+            capturedWindowCount: captured.count
+        ) {
+            if captured.isEmpty {
+                return PreparedStore(
+                    windows: existingWindows,
+                    keptWindowCount: existingWindows.count,
+                    shouldSave: false
+                )
+            }
+            let merged = LayoutWindowMerge.keepingClosed(saved: existingWindows, captured: captured)
+            return PreparedStore(
+                windows: merged.windows,
+                keptWindowCount: merged.keptWindowCount,
+                shouldSave: true
+            )
+        }
+        return PreparedStore(windows: captured, keptWindowCount: 0, shouldSave: true)
     }
 }
 

@@ -224,12 +224,12 @@ final class WindowMatcherTests: XCTestCase {
         XCTAssertFalse(LateWindowRetry.isFailedRestore(restored: matches.count, failed: 0, awaitingBundleIdentifiers: awaiting))
         XCTAssertFalse(LateWindowRetry.isFailedRestore(restored: 0, failed: 0, awaitingBundleIdentifiers: awaiting))
         XCTAssertTrue(LateWindowRetry.shouldRetry(awaiting: awaiting, elapsed: 0))
-        XCTAssertTrue(LateWindowRetry.shouldRetry(awaiting: awaiting, elapsed: 14.9))
-        XCTAssertFalse(LateWindowRetry.shouldRetry(awaiting: awaiting, elapsed: 15))
+        XCTAssertTrue(LateWindowRetry.shouldRetry(awaiting: awaiting, elapsed: 29.9))
+        XCTAssertFalse(LateWindowRetry.shouldRetry(awaiting: awaiting, elapsed: 30))
         XCTAssertFalse(LateWindowRetry.shouldRetry(awaiting: [], elapsed: 0))
         XCTAssertTrue(LateWindowRetry.isFailedRestore(restored: 0, failed: 2, awaitingBundleIdentifiers: []))
         XCTAssertEqual(LateWindowRetry.interval, 1)
-        XCTAssertEqual(LateWindowRetry.duration, 15)
+        XCTAssertEqual(LateWindowRetry.duration, 30)
 
         let later = live + [window("com.apple.Safari", "Start Page", 4)]
         let retried = WindowMatcher.match(
@@ -241,6 +241,20 @@ final class WindowMatcherTests: XCTestCase {
             saved: saved,
             liveBundleIdentifiers: Set(later.map(\.bundleIdentifier))
         ).isEmpty)
+    }
+
+    func testSkippedWindowsOfARunningAppAreRetried() {
+        let saved = [
+            window("com.apple.finder", "A", 0),
+            window("com.apple.finder", "B", 1),
+            window("com.apple.Safari", "Start Page", 0),
+            window(WindowMinderIdentity.bundleIdentifier, "Preferences", 0),
+        ]
+        let matched = [window("com.apple.finder", "A", 0)]
+        let retry = LateWindowRetry.windowsToRetry(saved: saved, matched: matched)
+        XCTAssertEqual(retry.map(\.windowTitle), ["B", "Start Page"])
+        XCTAssertTrue(LateWindowRetry.shouldRetry(awaiting: retry.map(\.bundleIdentifier), elapsed: 29))
+        XCTAssertFalse(LateWindowRetry.shouldRetry(awaiting: retry.map(\.bundleIdentifier), elapsed: 30))
     }
 
     func testMissingWindowsAreSkipped() {

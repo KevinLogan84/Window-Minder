@@ -223,7 +223,141 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(DisplayRestoreTiming.debounce, 1.5)
         XCTAssertLessThanOrEqual(DisplayRestoreTiming.debounce, 2)
         XCTAssertGreaterThan(DisplayRestoreTiming.sameSetupCoalesce, DisplayRestoreTiming.debounce)
+        XCTAssertEqual(DisplayRestoreTiming.wakeLayoutWindow, 90)
         XCTAssertGreaterThan(DisplayRestoreTiming.wakeLayoutWindow, DisplayRestoreTiming.debounce)
+    }
+
+    func testSubsetOfASavedSetupWaitsForTheMissingDisplay() {
+        for signal: DisplayRestoreCoalescer.Signal in [.wake, .screensWake, .sessionUnlock] {
+            var script = Script()
+            script.signal(signal, at: 0)
+            let waiting = script.settle(
+                at: DisplayRestoreTiming.debounce,
+                key: "laptop",
+                hasLayout: true,
+                keyChanged: true,
+                currentTokens: ["built-in"],
+                preWakeTokens: ["built-in", "lu28r55"],
+                preWakeHasSavedLayout: true
+            )
+            guard case .waitForDisplays = waiting else {
+                return XCTFail("\(signal) should wait for the missing display, got \(waiting)")
+            }
+            XCTAssertEqual(script.restores, [])
+            XCTAssertEqual(script.coalescer.lastDecisionReason, .waitingForMissingDisplay)
+        }
+    }
+
+    func testMissingDisplayReturnsInsideTheWakeWindowAndRestoresOnce() {
+        var script = Script()
+        script.signal(.screensWake, at: 0)
+        let waiting = script.settle(
+            at: 1.5,
+            key: "laptop",
+            hasLayout: true,
+            keyChanged: true,
+            currentTokens: ["built-in"],
+            preWakeTokens: ["built-in", "lu28r55"],
+            preWakeHasSavedLayout: true
+        )
+        guard case .waitForDisplays = waiting else {
+            return XCTFail("A subset of the saved setup should wait, got \(waiting)")
+        }
+
+        // A display-change signal inside the wake window must not give up on the missing screen.
+        script.signal(.displayChange, at: 10)
+        let stillWaiting = script.settle(
+            at: 10 + DisplayRestoreTiming.debounce,
+            key: "laptop",
+            hasLayout: true,
+            keyChanged: true,
+            currentTokens: ["built-in"],
+            preWakeTokens: ["built-in", "lu28r55"],
+            preWakeHasSavedLayout: true
+        )
+        guard case .waitForDisplays = stillWaiting else {
+            return XCTFail("A display change inside the wake window should keep waiting, got \(stillWaiting)")
+        }
+        XCTAssertEqual(script.restores, [])
+
+        script.signal(.displayChange, at: 67)
+        let restored = script.settle(
+            at: 67 + DisplayRestoreTiming.debounce,
+            key: "desk",
+            hasLayout: true,
+            keyChanged: false,
+            currentTokens: ["built-in", "lu28r55"],
+            preWakeTokens: ["built-in", "lu28r55"],
+            preWakeHasSavedLayout: true
+        )
+        XCTAssertEqual(restored, .restore(key: "desk", generation: script.generation))
+        XCTAssertEqual(script.restores, ["desk"])
+        XCTAssertEqual(script.coalescer.lastDecisionReason, .wakeRestore)
+
+        let again = script.coalescer.evaluate(
+            script.generation,
+            script.probe(
+                key: "desk",
+                hasLayout: true,
+                autoRestore: true,
+                drag: false,
+                keyChanged: false,
+                now: 70,
+                currentTokens: ["built-in", "lu28r55"],
+                preWakeTokens: ["built-in", "lu28r55"],
+                preWakeHasSavedLayout: true
+            )
+        )
+        XCTAssertEqual(again, .skip)
+        XCTAssertEqual(script.restores, ["desk"])
+    }
+
+    func testSubsetWaitTimesOutToTheSubsetLayout() {
+        var script = Script()
+        script.signal(.wake, at: 0)
+        let waiting = script.settle(
+            at: DisplayRestoreTiming.debounce,
+            key: "laptop",
+            hasLayout: true,
+            keyChanged: true,
+            currentTokens: ["built-in"],
+            preWakeTokens: ["built-in", "lu28r55"],
+            preWakeHasSavedLayout: true
+        )
+        guard case .waitForDisplays = waiting else {
+            return XCTFail("The subset should wait inside the wake window, got \(waiting)")
+        }
+        XCTAssertEqual(script.restores, [])
+
+        let fallback = script.settle(
+            at: DisplayRestoreTiming.wakeLayoutWindow + DisplayRestoreTiming.debounce,
+            key: "laptop",
+            hasLayout: true,
+            keyChanged: true,
+            currentTokens: ["built-in"],
+            preWakeTokens: ["built-in", "lu28r55"],
+            preWakeHasSavedLayout: true
+        )
+        XCTAssertEqual(fallback, .restore(key: "laptop", generation: script.generation))
+        XCTAssertEqual(script.restores, ["laptop"])
+        XCTAssertEqual(script.coalescer.lastDecisionReason, .subsetTimedOut)
+    }
+
+    func testDisplayChangeThatIsNotAWakeSubsetRestoresImmediately() {
+        var script = Script()
+        script.signal(.displayChange, at: 0)
+        let decision = script.settle(
+            at: DisplayRestoreTiming.debounce,
+            key: "laptop",
+            hasLayout: true,
+            keyChanged: true,
+            currentTokens: ["built-in"],
+            preWakeTokens: ["built-in", "lu28r55"],
+            preWakeHasSavedLayout: true
+        )
+        XCTAssertEqual(decision, .restore(key: "laptop", generation: script.generation))
+        XCTAssertEqual(script.restores, ["laptop"])
+        XCTAssertEqual(script.coalescer.lastDecisionReason, .keyChanged)
     }
 
     private func probe(
@@ -232,7 +366,10 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
         autoRestore: Bool = true,
         drag: Bool = false,
         keyChanged: Bool,
-        now: TimeInterval
+        now: TimeInterval,
+        currentTokens: [String] = [],
+        preWakeTokens: [String] = [],
+        preWakeHasSavedLayout: Bool = false
     ) -> DisplayRestoreCoalescer.Probe {
         DisplayRestoreCoalescer.Probe(
             autoRestore: autoRestore,
@@ -240,7 +377,10 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
             hasSavedLayout: hasLayout,
             dragInProgress: drag,
             keyChanged: keyChanged,
-            now: now
+            now: now,
+            currentDisplayTokens: currentTokens,
+            preWakeDisplayTokens: preWakeTokens,
+            preWakeHasSavedLayout: preWakeHasSavedLayout
         )
     }
 
@@ -266,7 +406,10 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
             hasLayout: Bool,
             autoRestore: Bool = true,
             drag: Bool = false,
-            keyChanged: Bool
+            keyChanged: Bool,
+            currentTokens: [String] = [],
+            preWakeTokens: [String] = [],
+            preWakeHasSavedLayout: Bool = false
         ) -> DisplayRestoreCoalescer.Decision {
             guard let quietDeadline = deadline, time + 0.0001 >= quietDeadline else { return .skip }
             let decision = coalescer.evaluate(generation, probe(
@@ -275,7 +418,10 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
                 autoRestore: autoRestore,
                 drag: drag,
                 keyChanged: keyChanged,
-                now: time
+                now: time,
+                currentTokens: currentTokens,
+                preWakeTokens: preWakeTokens,
+                preWakeHasSavedLayout: preWakeHasSavedLayout
             ))
             switch decision {
             case .restore(let restoredKey, let generation):
@@ -300,7 +446,10 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
             autoRestore: Bool,
             drag: Bool,
             keyChanged: Bool,
-            now: TimeInterval
+            now: TimeInterval,
+            currentTokens: [String] = [],
+            preWakeTokens: [String] = [],
+            preWakeHasSavedLayout: Bool = false
         ) -> DisplayRestoreCoalescer.Probe {
             DisplayRestoreCoalescer.Probe(
                 autoRestore: autoRestore,
@@ -308,7 +457,10 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
                 hasSavedLayout: hasLayout,
                 dragInProgress: drag,
                 keyChanged: keyChanged,
-                now: now
+                now: now,
+                currentDisplayTokens: currentTokens,
+                preWakeDisplayTokens: preWakeTokens,
+                preWakeHasSavedLayout: preWakeHasSavedLayout
             )
         }
 

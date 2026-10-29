@@ -38,7 +38,7 @@ struct PreferencesView: View {
             } header: {
                 Text("Automation")
             } footer: {
-                Text("Display changes settle for a couple of seconds, so plugging in a dock is one restore. The previous setup is saved from the latest snapshot taken while that setup was still connected.")
+                Text("Display changes settle for a couple of seconds, so plugging in a dock is one restore. After the displays wake, a screen that is still connecting is waited on for about a minute and a half before a layout for fewer screens is applied. The previous setup is saved from the latest snapshot taken while that setup was still connected.")
                     .font(.callout)
             }
 

@@ -219,9 +219,34 @@ final class WindowOperationTests: XCTestCase {
 
     func testEmptyAutomaticCaptureDoesNotEraseASavedLayout() {
         XCTAssertFalse(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 4, capturedWindowCount: 0))
-        XCTAssertTrue(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 4, capturedWindowCount: 2))
+        XCTAssertFalse(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 4, capturedWindowCount: 2))
+        XCTAssertTrue(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 4, capturedWindowCount: 4))
+        XCTAssertTrue(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 4, capturedWindowCount: 5))
         XCTAssertTrue(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: nil, capturedWindowCount: 0))
         XCTAssertTrue(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: 0, capturedWindowCount: 0))
+    }
+
+    func testFewerWindowsStoreKeepsClosedWindows() {
+        let saved = [
+            record("com.apple.finder", "Documents", 0, x: 10),
+            record("com.apple.finder", "Downloads", 1, x: 20),
+            record("com.apple.Safari", "Start Page", 0, x: 30),
+        ]
+        let captured = [
+            record("com.apple.finder", "Documents", 0, x: 99),
+        ]
+        XCTAssertFalse(LayoutOverwrite.shouldReplaceSavedLayout(existingWindowCount: saved.count, capturedWindowCount: captured.count))
+        let prepared = LayoutOverwrite.prepareStore(existing: saved, captured: captured)
+        XCTAssertTrue(prepared.shouldSave)
+        XCTAssertEqual(prepared.keptWindowCount, 2)
+        XCTAssertEqual(prepared.windows.count, 3)
+        XCTAssertEqual(prepared.windows.first { $0.windowTitle == "Documents" }?.frame.x, 99)
+        XCTAssertEqual(prepared.windows.first { $0.windowTitle == "Downloads" }?.frame.x, 20)
+        XCTAssertEqual(prepared.windows.first { $0.windowTitle == "Start Page" }?.frame.x, 30)
+        XCTAssertFalse(LayoutOverwrite.prepareStore(existing: saved, captured: []).shouldSave)
+
+        let summary = StoreSummary(windowCount: 1, appCount: 1, unresponsiveAppCount: 0, keptWindowCount: 2)
+        XCTAssertEqual(summary.message, "Stored 1 window from 1 app. Kept 2 windows that were not open")
     }
 
     func testRestoreSummaryCounts() {
@@ -283,6 +308,15 @@ final class WindowOperationTests: XCTestCase {
         let loaded = try XCTUnwrap(try LayoutStore(directory: directory).load(key: "alpha"))
         XCTAssertEqual(loaded.windows.first?.minimized, false)
         XCTAssertEqual(loaded.windows.first?.windowTitle, "Documents")
+    }
+
+    private func record(_ bundle: String, _ title: String, _ index: Int, x: Double) -> WindowRecord {
+        WindowRecord(
+            bundleIdentifier: bundle,
+            windowTitle: title,
+            windowIndex: index,
+            frame: WMRect(x: x, y: 0, width: 100, height: 80)
+        )
     }
 
     private func candidate(
