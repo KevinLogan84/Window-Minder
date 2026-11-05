@@ -3,28 +3,28 @@ import XCTest
 @testable import WindowMinderCore
 #endif
 
-/// Every move between the real display setups this Mac has used: the built-in
-/// screen, an LG LU28R55, and a Sony TV. Each pair is checked for a plug or
+/// Every move between typical display setups: a built-in screen, an external
+/// monitor, and a TV. Each pair is checked for a plug or
 /// unplug while awake and for a sleep and wake, with and without a saved layout.
 final class DisplayCombinationMatrixTests: XCTestCase {
-    // Real identities, taken from the saved layout files.
+    // Made-up identities with realistic sizes.
     static let builtIn = DisplayDescriptor(
-        uuid: "37D8832A-2D66-02CA-B9F7-8F30A301B230",
+        uuid: "00000000-0000-0000-0000-00000000B001",
         frame: WMRect(x: 0, y: 0, width: 1512, height: 982),
         pixelWidth: 1512, pixelHeight: 982, name: "Built-in Retina Display",
-        vendorID: 1552, productID: 41057, serialNumber: 4_251_086_178
+        vendorID: 1111, productID: 101, serialNumber: 1001
     )
-    static let lg = DisplayDescriptor(
-        uuid: "14C9908E-8F1F-477D-A24F-7DBBDCF8DF05",
+    static let monitor = DisplayDescriptor(
+        uuid: "00000000-0000-0000-0000-00000000E001",
         frame: WMRect(x: 0, y: 0, width: 3008, height: 1692),
-        pixelWidth: 3008, pixelHeight: 1692, name: "LU28R55",
-        vendorID: 19501, productID: 4120, serialNumber: 809_056_085
+        pixelWidth: 3008, pixelHeight: 1692, name: "External Monitor",
+        vendorID: 2222, productID: 202, serialNumber: 2002
     )
-    static let sony = DisplayDescriptor(
-        uuid: "23ADC171-ED71-44B9-92E5-2E3DDA02101E",
+    static let tv = DisplayDescriptor(
+        uuid: "00000000-0000-0000-0000-00000000C001",
         frame: WMRect(x: 0, y: 0, width: 1920, height: 1080),
-        pixelWidth: 1920, pixelHeight: 1080, name: "SONY TV  *02",
-        vendorID: 19929, productID: 50179, serialNumber: 16_843_009
+        pixelWidth: 1920, pixelHeight: 1080, name: "TV",
+        vendorID: 3333, productID: 303, serialNumber: 3003
     )
 
     static func placed(_ display: DisplayDescriptor, x: Double, y: Double = 0) -> DisplayDescriptor {
@@ -44,19 +44,20 @@ final class DisplayCombinationMatrixTests: XCTestCase {
 
     static let setups: [Setup] = [
         Setup(name: "built-in", displays: [builtIn]),
-        Setup(name: "LU28R55", displays: [lg]),
-        Setup(name: "LU28R55 + built-in", displays: [lg, placed(builtIn, x: 3008)]),
-        Setup(name: "SONY TV", displays: [sony]),
-        Setup(name: "SONY TV + built-in", displays: [sony, placed(builtIn, x: 1920)]),
+        Setup(name: "monitor", displays: [monitor]),
+        Setup(name: "monitor + built-in", displays: [monitor, placed(builtIn, x: 3008)]),
+        Setup(name: "TV", displays: [tv]),
+        Setup(name: "TV + built-in", displays: [tv, placed(builtIn, x: 1920)]),
     ]
 
     // MARK: Keys
 
-    func testKeysMatchTheSavedFilesOnThisMac() {
-        XCTAssertEqual(Self.setups[0].key, "ecbafddeea9fa12b1ef4662333486c03445c7780ac1edd144ac253b86f927eba")
-        XCTAssertEqual(Self.setups[1].key, "a3c0043894ba9c956fa1b7bdc29cf93f0d8a4fcc27c74b7efa64cf3bdad889fd")
-        XCTAssertEqual(Self.setups[2].key, "5ec5362c33133b10ac91bc50d19fbdef34cab9f3b83fd4fabd29a6a01acbf81c")
-        XCTAssertEqual(Self.setups[3].key, "770e4671345cf1b15b2305df4291dff211d625990f50b1986a3215a698ef4b0c")
+    /// Golden keys. If the key formula changes, every saved layout file stops matching.
+    func testKeysAreStable() {
+        XCTAssertEqual(Self.setups[0].key, "9551cab054497a2d26b970f1b47daef089ddf1085485f74f3f7db96ae68eee61")
+        XCTAssertEqual(Self.setups[1].key, "b3fa15041d2eb859687b46e96886961417b6597eb159bcc59b8f8c242f12b23f")
+        XCTAssertEqual(Self.setups[2].key, "7ba7a89c3d4605e172ac455115f7d2d42c68c771d290634aa19b7055a0e7f027")
+        XCTAssertEqual(Self.setups[3].key, "ca884bd074470b76d2f520e5a40c83fff8e933f1fc76865f6c689e5ab941c6ab")
     }
 
     func testEverySetupHasItsOwnKey() {
@@ -83,7 +84,7 @@ final class DisplayCombinationMatrixTests: XCTestCase {
     }
 
     func testResolutionChangeIsADifferentSetup() {
-        var scaled = Self.lg
+        var scaled = Self.monitor
         scaled.frame.width = 2560
         scaled.frame.height = 1440
         scaled.pixelWidth = 2560
@@ -302,8 +303,8 @@ final class DisplayCombinationMatrixTests: XCTestCase {
 
     // MARK: Unplug after a wake has been handled
 
-    /// Your 12:17 test: launch (or unlock) restores the full setup, then the monitor is
-    /// unplugged 30 seconds later. That is a real unplug and must not wait 90 seconds.
+    /// Launch (or unlock) restores the full setup, then the monitor is unplugged
+    /// 30 seconds later. That is a real unplug and must not wait 90 seconds.
     func testUnplugAfterWakeWasHandledDoesNotWait() {
         for signal in [DisplayRestoreCoalescer.Signal.launch, .wake, .screensWake, .sessionUnlock] {
             for from in Self.setups {

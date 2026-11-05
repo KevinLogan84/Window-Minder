@@ -500,7 +500,7 @@ final class DisplayConfigKeyTests: XCTestCase {
 
     func testKeyIsStableAndFilesystemSafe() {
         let configuration = DisplayConfiguration(displays: [
-            display(uuid: "37D8832A-2D66-02CA-B9F7-8F30A301B230", x: -1728.5, y: 0, name: "Left"),
+            display(uuid: "00000000-0000-0000-0000-00000000A001", x: -1728.5, y: 0, name: "Left"),
             display(uuid: "UUID/not/a/filename", x: 0, y: -50.25, name: "Primary"),
         ])
         let key = configuration.key
