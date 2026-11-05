@@ -52,6 +52,18 @@ struct DisplayCatalog {
         return PrimaryDisplayHeight.points(frames: frames)
     }
 
+    /// The usable area of each screen (without the menu bar and Dock), in Cocoa coordinates.
+    func visibleFrames() -> [WMRect] {
+        NSScreen.screens.map { screen in
+            WMRect(
+                x: Double(screen.visibleFrame.origin.x),
+                y: Double(screen.visibleFrame.origin.y),
+                width: Double(screen.visibleFrame.size.width),
+                height: Double(screen.visibleFrame.size.height)
+            )
+        }
+    }
+
     func currentKey() -> String? {
         let configuration = current()
         guard !configuration.displays.isEmpty else { return nil }

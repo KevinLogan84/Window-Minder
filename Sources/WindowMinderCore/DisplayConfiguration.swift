@@ -428,6 +428,21 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
     /// applying the smaller layout. The smaller layout is the fallback when the
     /// missing screen never returns.
     public mutating func evaluate(_ generation: Int, _ probe: Probe) -> Decision {
+        let decision = decide(generation, probe)
+        switch decision {
+        case .waitForDisplays, .deferUntilDragEnds:
+            break
+        case .restore, .skip:
+            // The wake has been handled. A screen unplugged after this is a real
+            // unplug, not a screen that is late to wake, so it must not wait 90 s.
+            if lastDecisionReason != .staleGeneration {
+                missingDisplayWaitUntil = -1
+            }
+        }
+        return decision
+    }
+
+    private mutating func decide(_ generation: Int, _ probe: Probe) -> Decision {
         guard generation == self.generation else {
             lastDecisionReason = .staleGeneration
             return .skip
@@ -617,13 +632,37 @@ public enum WindowPlacement {
     public static func placing(
         _ windows: [WindowRecord],
         savedDisplays: [DisplayDescriptor],
-        currentDisplays: [DisplayDescriptor]
+        currentDisplays: [DisplayDescriptor],
+        visibleFrames: [WMRect] = []
     ) -> [WindowRecord] {
         windows.map { window in
             var placed = window
             placed.frame = frame(window.frame, savedDisplays: savedDisplays, currentDisplays: currentDisplays)
+            placed.frame = fitting(placed.frame, into: visibleFrames)
             return placed
         }
+    }
+
+    /// A window larger than the usable area of its screen is shrunk to that area and
+    /// kept on the screen, which is what macOS does to it anyway. Asking for the larger
+    /// frame only makes the move look like a failure. A window that fits is unchanged,
+    /// even when it hangs off an edge.
+    public static func fitting(_ frame: WMRect, into visibleFrames: [WMRect]) -> WMRect {
+        guard !visibleFrames.isEmpty else { return frame }
+        let centerX = frame.x + frame.width / 2
+        let centerY = frame.y + frame.height / 2
+        let area = visibleFrames.first { area in
+            centerX >= area.x && centerX < area.x + area.width
+                && centerY >= area.y && centerY < area.y + area.height
+        } ?? visibleFrames.min { lhs, rhs in
+            distanceSquared(centerX, centerY, lhs) < distanceSquared(centerX, centerY, rhs)
+        }!
+        guard frame.width > area.width || frame.height > area.height else { return frame }
+        let width = min(frame.width, area.width)
+        let height = min(frame.height, area.height)
+        let x = min(max(frame.x, area.x), area.x + area.width - width)
+        let y = min(max(frame.y, area.y), area.y + area.height - height)
+        return WMRect(x: x, y: y, width: width, height: height)
     }
 
     private static func display(containingCenterOf rect: WMRect, among displays: [DisplayDescriptor]) -> DisplayDescriptor? {

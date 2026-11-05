@@ -52,6 +52,7 @@ final class LayoutCoordinator {
     private var axWaiters: [CheckedContinuation<Void, Never>] = []
     private var suppressDisplayReaction = false
     private var displayTask: Task<Void, Never>?
+    private var lateRetryTask: Task<Void, Never>?
     private var launched = false
     private var coalescer = DisplayRestoreCoalescer()
     /// Screens that were connected when this wake started. Frozen so a partial
@@ -244,84 +245,104 @@ final class LayoutCoordinator {
         let placed = WindowPlacement.placing(
             layout.windows,
             savedDisplays: layout.displays,
-            currentDisplays: configuration.displays
+            currentDisplays: configuration.displays,
+            visibleFrames: displays.visibleFrames()
         )
         layoutLogger.notice(
             "Restore displays=\(configuration.displays.count, privacy: .public) key=\(configuration.key, privacy: .public) savedKey=\(layout.key, privacy: .public) windows=\(placed.count, privacy: .public)"
         )
+        lateRetryTask?.cancel()
+        lateRetryTask = nil
         await acquireAX()
-        defer { releaseAX() }
         let applyGeneration = displayGeneration
         suppressDisplayReaction = true
-        defer {
-            finishDisplaySuppression(
-                restoredConfigurationKey: configuration.key,
-                generation: applyGeneration
-            )
-        }
         let ignored = settings().ignoredBundleIdentifiers
-        var restored = 0
-        var failed = 0
-        var unresponsive = 0
-        var pending = placed
-        let started = Date()
-        while true {
-            if Task.isCancelled { break }
-            if displays.current().key != configuration.key {
-                displayChangePending = true
-                break
-            }
-            let passHeight = displays.primaryHeight()
-            guard passHeight > 0 else { break }
-            let targets = accessibility.scanTargets(ignoredBundleIdentifiers: ignored)
-            let report = await AXWindowWork.restore(
-                targets: targets,
-                saved: pending,
+        var report: AXRestoreReport?
+        if !Task.isCancelled, displays.current().key == configuration.key, displays.primaryHeight() > 0 {
+            report = await AXWindowWork.restore(
+                targets: accessibility.scanTargets(ignoredBundleIdentifiers: ignored),
+                saved: placed,
                 ignoredBundleIdentifiers: ignored,
-                primaryHeight: passHeight
+                primaryHeight: displays.primaryHeight()
             )
-            restored += report.summary.restored
-            // Windows that missed are retried on the next pass, so only the last
-            // pass says how many are still out of place.
-            failed = report.summary.failed
-            unresponsive = report.summary.unresponsiveAppCount
-            let retry = LateWindowRetry.windowsToRetry(
-                saved: pending,
-                matched: report.matchedSaved,
-                ignoredBundleIdentifiers: ignored
-            )
-            let elapsed = Date().timeIntervalSince(started)
-            guard LateWindowRetry.shouldRetry(
-                awaiting: retry.map(\.bundleIdentifier),
-                elapsed: elapsed
-            ) else { break }
-            pending = retry
-            if pending.isEmpty { break }
-            layoutLogger.info(
-                "Retrying \(pending.count, privacy: .public) skipped windows elapsed=\(elapsed, privacy: .public)"
-            )
-            do {
-                try await Task.sleep(nanoseconds: UInt64(LateWindowRetry.interval * 1_000_000_000))
-            } catch {
-                break
-            }
+        } else {
+            displayChangePending = true
         }
+        releaseAX()
+        finishDisplaySuppression(restoredConfigurationKey: configuration.key, generation: applyGeneration)
         if !Task.isCancelled, displays.current().key == configuration.key {
             let capturedAt = Date()
             lastSnapshotAt = capturedAt
             snapshot = Snapshot(configuration: configuration, windows: placed, capturedAt: capturedAt)
         }
-        let eligible = LateWindowRetry.eligibleWindowCount(saved: placed, ignoredBundleIdentifiers: ignored)
+        guard let report else { return announceWhenIdle ? "The displays changed. Restore will run again." : "" }
+        let pending = LateWindowRetry.windowsToRetry(
+            saved: placed,
+            matched: report.matchedSaved,
+            ignoredBundleIdentifiers: ignored
+        )
+        // A display change during the apply already armed a new wait; that wait owns what happens next.
+        if !pending.isEmpty, displayGeneration == applyGeneration {
+            startLateRetries(pending, configurationKey: configuration.key)
+        }
         let summary = RestoreSummary(
-            restored: restored,
-            skipped: max(eligible - restored - failed, 0),
-            failed: failed,
-            unresponsiveAppCount: unresponsive
+            restored: report.summary.restored,
+            skipped: report.summary.skipped,
+            failed: report.summary.failed,
+            unresponsiveAppCount: report.summary.unresponsiveAppCount
         )
         if !announceWhenIdle, summary.restored == 0, summary.failed == 0 {
             return ""
         }
         return summary.message
+    }
+
+    /// Windows that were not open yet, or that missed, are tried again about once a
+    /// second for `LateWindowRetry.duration`. This runs after Restore has reported, so it
+    /// does not hold up the menu, Store, or the next display event. The Accessibility lock
+    /// is taken only for each pass. A display event or another Restore cancels it.
+    private func startLateRetries(_ windows: [WindowRecord], configurationKey: String) {
+        lateRetryTask?.cancel()
+        let started = Date()
+        lateRetryTask = Task { @MainActor in
+            var pending = windows
+            var restored = 0
+            while !pending.isEmpty {
+                let elapsed = Date().timeIntervalSince(started)
+                guard LateWindowRetry.shouldRetry(awaiting: pending.map(\.bundleIdentifier), elapsed: elapsed) else { break }
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(LateWindowRetry.interval * 1_000_000_000))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled, displays.current().key == configurationKey else { return }
+                let height = displays.primaryHeight()
+                guard height > 0 else { return }
+                let ignored = settings().ignoredBundleIdentifiers
+                await acquireAX()
+                guard !Task.isCancelled, displays.current().key == configurationKey else {
+                    releaseAX()
+                    return
+                }
+                let report = await AXWindowWork.restore(
+                    targets: accessibility.scanTargets(ignoredBundleIdentifiers: ignored),
+                    saved: pending,
+                    ignoredBundleIdentifiers: ignored,
+                    primaryHeight: height
+                )
+                releaseAX()
+                restored += report.summary.restored
+                pending = LateWindowRetry.windowsToRetry(
+                    saved: pending,
+                    matched: report.matchedSaved,
+                    ignoredBundleIdentifiers: ignored
+                )
+            }
+            if restored > 0 {
+                layoutLogger.notice("Late retry restored=\(restored, privacy: .public) stillMissing=\(pending.count, privacy: .public)")
+                onStatus("Restored \(restored) more \(restored == 1 ? "window" : "windows") as \(restored == 1 ? "it" : "they") opened.")
+            }
+        }
     }
 
     private func observeScreenChanges() {
@@ -482,6 +503,8 @@ final class LayoutCoordinator {
         dragWatch?.invalidate()
         dragWatch = nil
         screenWork?.cancel()
+        lateRetryTask?.cancel()
+        lateRetryTask = nil
         displayGeneration += 1
         let work = DispatchWorkItem { [weak self] in
             guard let coordinator = self else { return }
