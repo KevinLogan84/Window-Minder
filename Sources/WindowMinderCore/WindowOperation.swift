@@ -83,9 +83,17 @@ public enum SnapshotSchedule {
 }
 
 public enum WindowScanPlan {
-    /// Unresponsive apps are abandoned instead of stalling the scan.
+    /// Background snapshots abandon unresponsive apps instead of stalling the scan.
     public static let messagingTimeoutSeconds: Double = 0.25
+    /// Store and Restore wait longer. Safari, Mail, Photos, and Messages often take
+    /// more than a quarter second to answer, and longer still right after a wake or
+    /// a display change. A move that times out leaves the window where macOS put it.
+    public static let interactiveTimeoutSeconds: Double = 1.5
     public static let maxConcurrentApps: Int = 4
+
+    public static func timeout(interactive: Bool) -> Double {
+        interactive ? interactiveTimeoutSeconds : messagingTimeoutSeconds
+    }
 
     /// Bounded waves. Each wave is at most `limit` apps, and the waves cover every app once.
     public static func waveSizes(appCount: Int, limit: Int = maxConcurrentApps) -> [Int] {
@@ -186,6 +194,29 @@ public enum RestoreFramePlan {
     /// Position, then size, then position again. Accessibility often clamps size to the
     /// screen the window is currently on, so the second position lands the final origin.
     public static let writeOrder: [FrameWriteStep] = [.position, .size, .position]
+    /// Extra write passes when the read-back frame is not where it was sent.
+    public static let maxCorrectionPasses = 2
+    /// Points of slack when comparing the read-back frame with the target.
+    public static let tolerance: Double = 2
+
+    public enum Landing: Equatable, Sendable {
+        /// Origin and size match.
+        case exact
+        /// Origin matches. The app kept its own size (a minimum or fixed size).
+        case positionOnly
+        /// The window is not where it was sent.
+        case missed
+    }
+
+    /// Compares the frame read back after a move with the frame that was written.
+    /// Both are in the same coordinate space.
+    public static func landing(target: WMRect, actual: WMRect?, tolerance: Double = tolerance) -> Landing {
+        guard let actual else { return .missed }
+        let originOK = abs(actual.x - target.x) <= tolerance && abs(actual.y - target.y) <= tolerance
+        guard originOK else { return .missed }
+        let sizeOK = abs(actual.width - target.width) <= tolerance && abs(actual.height - target.height) <= tolerance
+        return sizeOK ? .exact : .positionOnly
+    }
 
     public enum Action: Equatable, Sendable {
         case skipMinimized

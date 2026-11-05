@@ -49,9 +49,10 @@ enum AXWindowWork {
                 windowSignposter.endInterval("Snapshot Windows", interval)
             }
         }
-        await setSystemWideTimeout()
+        let timeout = Float(WindowScanPlan.timeout(interactive: trace == .store))
+        await setSystemWideTimeout(timeout)
         let results = await mapApps(targets) { target in
-            captureApp(target, primaryHeight: primaryHeight)
+            captureApp(target, primaryHeight: primaryHeight, timeout: timeout)
         }
         let windows = results.flatMap(\.windows).sorted { lhs, rhs in
             if lhs.bundleIdentifier != rhs.bundleIdentifier {
@@ -92,14 +93,16 @@ enum AXWindowWork {
         let started = Date()
         let interval = windowSignposter.beginInterval("Restore Windows")
         defer { windowSignposter.endInterval("Restore Windows", interval) }
-        await setSystemWideTimeout()
+        let timeout = Float(WindowScanPlan.interactiveTimeoutSeconds)
+        await setSystemWideTimeout(timeout)
         let ignored = ignoredBundleIdentifiers.union([WindowMinderIdentity.bundleIdentifier])
         let results = await mapApps(targets) { target in
             restoreApp(
                 target,
                 saved: saved,
                 ignoredBundleIdentifiers: ignored,
-                primaryHeight: primaryHeight
+                primaryHeight: primaryHeight,
+                timeout: timeout
             )
         }
         let scanned = Set(targets.map(\.bundleIdentifier))
@@ -117,7 +120,7 @@ enum AXWindowWork {
         let elapsed = elapsedMilliseconds(since: started)
         let bundlesWithLiveWindows = results.filter(\.sawWindows).map(\.bundleIdentifier).sorted()
         let matchedSaved = results.flatMap(\.matchedSaved)
-        windowLogger.info(
+        windowLogger.notice(
             "Restore elapsedMs=\(elapsed, privacy: .public) appsScanned=\(targets.count, privacy: .public) appsTimedOut=\(summary.unresponsiveAppCount, privacy: .public) restored=\(summary.restored, privacy: .public) skipped=\(summary.skipped, privacy: .public) failed=\(summary.failed, privacy: .public) matched=\(matchedSaved.count, privacy: .public)"
         )
         return AXRestoreReport(
@@ -143,9 +146,9 @@ enum AXWindowWork {
         var matchedSaved: [WindowRecord]
     }
 
-    private static func captureApp(_ target: ScanCandidate, primaryHeight: Double) -> AppCapture {
+    private static func captureApp(_ target: ScanCandidate, primaryHeight: Double, timeout: Float) -> AppCapture {
         let app = AXUIElementCreateApplication(target.processIdentifier)
-        setTimeout(app)
+        setTimeout(app, timeout)
         switch copyWindows(of: app) {
         case .timedOut:
             windowLogger.error(
@@ -153,7 +156,7 @@ enum AXWindowWork {
             )
             return AppCapture(windows: [], timedOut: true)
         case .windows(let elements):
-            let attributes = elements.map(copyWindowAttributes)
+            let attributes = elements.map { copyWindowAttributes($0, timeout: timeout) }
             let classified = WindowCaptureRules.classify(attributes)
             var windows: [WindowRecord] = []
             for item in classified where item.includeInStore {
@@ -177,11 +180,24 @@ enum AXWindowWork {
         _ target: ScanCandidate,
         saved: [WindowRecord],
         ignoredBundleIdentifiers: Set<String>,
-        primaryHeight: Double
+        primaryHeight: Double,
+        timeout: Float
     ) -> AppRestore {
         let savedForApp = saved.filter { $0.bundleIdentifier == target.bundleIdentifier }
         let app = AXUIElementCreateApplication(target.processIdentifier)
-        setTimeout(app)
+        setTimeout(app, timeout)
+        // With AXEnhancedUserInterface on (VoiceOver, some window tools, Chromium and
+        // Electron apps), the app animates moves and answers with stale frames, so the
+        // window lands short of its target. Turn it off for the move and put it back.
+        let enhancedUI = boolAttribute("AXEnhancedUserInterface", of: app)
+        if enhancedUI == true {
+            _ = setBoolean(false, attribute: "AXEnhancedUserInterface", on: app)
+        }
+        defer {
+            if enhancedUI == true {
+                _ = setBoolean(true, attribute: "AXEnhancedUserInterface", on: app)
+            }
+        }
         switch copyWindows(of: app) {
         case .timedOut:
             windowLogger.error(
@@ -198,7 +214,7 @@ enum AXWindowWork {
                 matchedSaved: []
             )
         case .windows(let elements):
-            let attributes = elements.map(copyWindowAttributes)
+            let attributes = elements.map { copyWindowAttributes($0, timeout: timeout) }
             let classified = WindowCaptureRules.classify(attributes)
             var live: [(window: LiveWindow, element: AXUIElement, fullscreen: Bool)] = []
             for (offset, item) in classified.enumerated() where item.includeInRestore {
@@ -229,6 +245,9 @@ enum AXWindowWork {
             var restored = 0
             var failed = 0
             var skipped = 0
+            // Only windows that landed are done. One that could not be moved, or that
+            // ended up somewhere else, stays pending so the next pass tries it again.
+            var settled: [WindowRecord] = []
             for match in matches {
                 guard let found = pool.firstIndex(where: { candidate in
                     candidate.window.record.bundleIdentifier == match.live.bundleIdentifier
@@ -248,16 +267,20 @@ enum AXWindowWork {
                 switch action {
                 case .skipMinimized:
                     skipped += 1
+                    settled.append(match.saved)
                 case .move(let exitFullscreen, let unminimize):
-                    if apply(
+                    let landing = apply(
                         frame: match.saved.frame,
                         to: liveWindow.element,
                         primaryHeight: primaryHeight,
                         exitFullscreen: exitFullscreen,
                         unminimize: unminimize
-                    ) {
+                    )
+                    switch landing {
+                    case .exact, .positionOnly:
                         restored += 1
-                    } else {
+                        settled.append(match.saved)
+                    case .missed:
                         failed += 1
                         windowLogger.error(
                             "Could not move \(match.live.bundleIdentifier, privacy: .public) window \(match.live.windowIndex, privacy: .public)"
@@ -280,37 +303,59 @@ enum AXWindowWork {
                 failed: failed,
                 timedOut: false,
                 sawWindows: !live.isEmpty,
-                matchedSaved: matches.map(\.saved)
+                matchedSaved: settled
             )
         }
     }
 
+    /// Writes the frame, reads it back, and writes again while it is off.
     private static func apply(
         frame: WMRect,
         to element: AXUIElement,
         primaryHeight: Double,
         exitFullscreen: Bool,
         unminimize: Bool
-    ) -> Bool {
+    ) -> RestoreFramePlan.Landing {
         if exitFullscreen {
             _ = setBoolean(false, attribute: "AXFullScreen", on: element)
         }
         if unminimize, !setBoolean(false, attribute: "AXMinimized", on: element) {
-            return false
+            return .missed
         }
         let axFrame = CoordinateConverter.accessibilityFrame(fromCocoa: frame, primaryHeight: primaryHeight)
-        var ok = true
-        for step in RestoreFramePlan.writeOrder {
-            let wrote: Bool
-            switch step {
-            case .position:
-                wrote = setPoint(CGPoint(x: axFrame.x, y: axFrame.y), on: element)
-            case .size:
-                wrote = setSize(CGSize(width: axFrame.width, height: axFrame.height), on: element)
+        var landing = RestoreFramePlan.Landing.missed
+        for _ in 0...RestoreFramePlan.maxCorrectionPasses {
+            for step in RestoreFramePlan.writeOrder {
+                switch step {
+                case .position:
+                    _ = setPoint(CGPoint(x: axFrame.x, y: axFrame.y), on: element)
+                case .size:
+                    _ = setSize(CGSize(width: axFrame.width, height: axFrame.height), on: element)
+                }
             }
-            ok = wrote && ok
+            landing = RestoreFramePlan.landing(target: axFrame, actual: readFrame(of: element))
+            if landing == .exact { break }
         }
-        return ok
+        return landing
+    }
+
+    private static func readFrame(of element: AXUIElement) -> WMRect? {
+        let values = copyMultiple(element, names: ["AXPosition", "AXSize"])
+        guard let position = pointValue(values[0]), let size = sizeValue(values[1]) else { return nil }
+        return WMRect(
+            x: Double(position.x),
+            y: Double(position.y),
+            width: Double(size.width),
+            height: Double(size.height)
+        )
+    }
+
+    private static func boolAttribute(_ name: String, of element: AXUIElement) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success, let value else {
+            return nil
+        }
+        return boolValue(value)
     }
 
     private static func mapApps<T: Sendable>(
@@ -335,8 +380,7 @@ enum AXWindowWork {
         }
     }
 
-    private static func setSystemWideTimeout() async {
-        let timeout = Float(WindowScanPlan.messagingTimeoutSeconds)
+    private static func setSystemWideTimeout(_ timeout: Float) async {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let system = AXUIElementCreateSystemWide()
@@ -346,8 +390,8 @@ enum AXWindowWork {
         }
     }
 
-    private static func setTimeout(_ element: AXUIElement) {
-        AXUIElementSetMessagingTimeout(element, Float(WindowScanPlan.messagingTimeoutSeconds))
+    private static func setTimeout(_ element: AXUIElement, _ timeout: Float) {
+        AXUIElementSetMessagingTimeout(element, timeout)
     }
 
     private enum WindowList {
@@ -392,8 +436,8 @@ enum AXWindowWork {
         "AXFullScreen",
     ]
 
-    private static func copyWindowAttributes(_ element: AXUIElement) -> ScannedWindowAttributes {
-        setTimeout(element)
+    private static func copyWindowAttributes(_ element: AXUIElement, timeout: Float) -> ScannedWindowAttributes {
+        setTimeout(element, timeout)
         let values = copyMultiple(element, names: attributeNames)
         let role = stringValue(values[0])
         let subrole = stringValue(values[1])

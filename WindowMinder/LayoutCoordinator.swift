@@ -246,7 +246,7 @@ final class LayoutCoordinator {
             savedDisplays: layout.displays,
             currentDisplays: configuration.displays
         )
-        layoutLogger.info(
+        layoutLogger.notice(
             "Restore displays=\(configuration.displays.count, privacy: .public) key=\(configuration.key, privacy: .public) savedKey=\(layout.key, privacy: .public) windows=\(placed.count, privacy: .public)"
         )
         await acquireAX()
@@ -281,7 +281,9 @@ final class LayoutCoordinator {
                 primaryHeight: passHeight
             )
             restored += report.summary.restored
-            failed += report.summary.failed
+            // Windows that missed are retried on the next pass, so only the last
+            // pass says how many are still out of place.
+            failed = report.summary.failed
             unresponsive = report.summary.unresponsiveAppCount
             let retry = LateWindowRetry.windowsToRetry(
                 saved: pending,
@@ -417,7 +419,7 @@ final class LayoutCoordinator {
         let name = signal.logName
         switch coalescer.note(signal, at: monotonicNow()) {
         case .arm(let generation):
-            layoutLogger.info(
+            layoutLogger.notice(
                 "Observed \(name, privacy: .public) armed generation=\(generation, privacy: .public)"
             )
             beginQuietWait(generation: generation)
@@ -560,7 +562,7 @@ final class LayoutCoordinator {
             action = "skip"
         }
         let reason = coalescer.lastDecisionReason.description
-        layoutLogger.info(
+        layoutLogger.notice(
             "Decision \(action, privacy: .public) reason=\(reason, privacy: .public)"
         )
     }

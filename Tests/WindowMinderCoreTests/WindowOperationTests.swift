@@ -64,6 +64,8 @@ final class WindowOperationTests: XCTestCase {
 
     func testTimeoutAndConcurrencyPlan() {
         XCTAssertEqual(WindowScanPlan.messagingTimeoutSeconds, 0.25)
+        XCTAssertEqual(WindowScanPlan.timeout(interactive: false), 0.25)
+        XCTAssertGreaterThanOrEqual(WindowScanPlan.timeout(interactive: true), 1)
         XCTAssertEqual(WindowScanPlan.maxConcurrentApps, 4)
         XCTAssertEqual(WindowScanPlan.waveSizes(appCount: 0), [])
         XCTAssertEqual(WindowScanPlan.waveSizes(appCount: 3), [3])
@@ -350,5 +352,30 @@ final class WindowOperationTests: XCTestCase {
             minimized: minimized,
             fullscreen: false
         )
+    }
+
+    func testLandingComparesReadBackFrame() {
+        let target = WMRect(x: 100, y: 200, width: 800, height: 600)
+        XCTAssertEqual(RestoreFramePlan.landing(target: target, actual: target), .exact)
+        XCTAssertEqual(
+            RestoreFramePlan.landing(target: target, actual: WMRect(x: 101, y: 199, width: 801, height: 600)),
+            .exact
+        )
+        XCTAssertEqual(
+            RestoreFramePlan.landing(target: target, actual: WMRect(x: 100, y: 200, width: 1000, height: 700)),
+            .positionOnly
+        )
+        XCTAssertEqual(
+            RestoreFramePlan.landing(target: target, actual: WMRect(x: 3108, y: 200, width: 800, height: 600)),
+            .missed
+        )
+        XCTAssertEqual(RestoreFramePlan.landing(target: target, actual: nil), .missed)
+    }
+
+    func testWindowThatMissedIsRetried() {
+        let landed = WindowRecord(bundleIdentifier: "com.apple.Safari", windowTitle: "A", windowIndex: 0, frame: WMRect(x: 0, y: 0, width: 10, height: 10), minimized: false)
+        let missed = WindowRecord(bundleIdentifier: "com.apple.mail", windowTitle: "Inbox", windowIndex: 0, frame: WMRect(x: 0, y: 0, width: 10, height: 10), minimized: false)
+        let retry = LateWindowRetry.windowsToRetry(saved: [landed, missed], matched: [landed])
+        XCTAssertEqual(retry, [missed])
     }
 }
