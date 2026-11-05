@@ -377,6 +377,34 @@ final class DisplayConfigKeyTests: XCTestCase {
         XCTAssertNil(LayoutCatalog.layout(for: DisplayConfiguration(displays: []), in: [newer]))
     }
 
+    func testEmptyExactLayoutDoesNotHideASavedLayout() {
+        let current = DisplayConfiguration(displays: [
+            display(uuid: "NEW", x: 0, y: 0, width: 1440, height: 900, pixelsWide: 2880, pixelsHigh: 1800),
+        ])
+        let legacyDisplays = [
+            display(uuid: "OLD", x: 12, y: -4, width: 1440, height: 900, pixelsWide: 2880, pixelsHigh: 1800),
+        ]
+        let legacy = layout(
+            key: "legacy",
+            savedAt: Date(timeIntervalSince1970: 10),
+            displays: legacyDisplays,
+            title: "Kept"
+        )
+        let empty = SavedLayout(
+            version: SavedLayout.currentVersion,
+            key: current.key,
+            savedAt: Date(timeIntervalSince1970: 20),
+            displays: current.displays,
+            windows: []
+        )
+        XCTAssertEqual(
+            LayoutCatalog.layout(for: current, in: [empty, legacy])?.windows.first?.windowTitle,
+            "Kept"
+        )
+        XCTAssertNil(LayoutCatalog.layout(for: current, in: [empty]))
+        XCTAssertNotEqual(legacy.key, current.key)
+    }
+
     func testPrimarySwapRebasesTheWindowOntoTheSameDisplay() {
         let savedLaptop = display(
             uuid: "laptop",

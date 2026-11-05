@@ -243,6 +243,24 @@ final class WindowMatcherTests: XCTestCase {
         ).isEmpty)
     }
 
+    func testFirstRestorePassRunsWhenTheDisplayKeyFlickers() {
+        XCTAssertTrue(RestoreDrive.shouldRunPass(index: 0, displayKeyChanged: false))
+        XCTAssertTrue(RestoreDrive.shouldRunPass(index: 0, displayKeyChanged: true))
+        XCTAssertTrue(RestoreDrive.shouldRunPass(index: 1, displayKeyChanged: false))
+        XCTAssertFalse(RestoreDrive.shouldRunPass(index: 1, displayKeyChanged: true))
+    }
+
+    func testAFailedMoveIsRetried() {
+        let saved = [
+            window("com.apple.finder", "Documents", 0),
+            window("com.apple.Safari", "Start Page", 0),
+        ]
+        // The move failed, so the window is not settled and stays in the retry.
+        let settled = [window("com.apple.finder", "Documents", 0)]
+        let retry = LateWindowRetry.windowsToRetry(saved: saved, matched: settled)
+        XCTAssertEqual(retry.map(\.windowTitle), ["Start Page"])
+    }
+
     func testSkippedWindowsOfARunningAppAreRetried() {
         let saved = [
             window("com.apple.finder", "A", 0),

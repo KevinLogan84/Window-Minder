@@ -25,6 +25,7 @@ final class AppModel {
     private static weak var trustRefreshTarget: AppModel?
     var onAccessibilityTrustChange: (@MainActor () -> Void)?
     private var windowOperation: Task<Void, Never>?
+    private var operationSettled = false
     private var menuBarGeneration = 0
     /// Status text that belongs to a store or restore that has not finished.
     private var inProgressStatus: String?
@@ -164,6 +165,11 @@ final class AppModel {
 
     /// Live Accessibility probe plus the cached process flag. Starts or stops the one-second poll.
     func refreshAccessibilityTrust(source: AccessibilityTrustCheckSource) {
+        // A probe copies the same windows Store and Restore are moving. Running
+        // both at once can stall Accessibility and leave the hourglass up.
+        if isWindowOperationRunning || accessibility.isPerformingWindowWork {
+            return
+        }
         if source == .activation {
             let now = ProcessInfo.processInfo.systemUptime
             if now - lastActivationCheckUptime < 0.3 {
@@ -212,18 +218,45 @@ final class AppModel {
 
     func storeNow() {
         guard beginWindowOperation(starting: MenuStatusLine.storing) else { return }
-        windowOperation = Task { @MainActor in
-            let message = await self.coordinator?.storeCurrent() ?? "Window Minder is still starting."
-            self.finishWindowOperation(message)
+        startWindowOperation(fallback: MenuStatusLine.couldNotStore) { [weak self] in
+            await self?.coordinator?.storeCurrent() ?? "Window Minder is still starting."
         }
     }
 
     func restoreNow() {
         guard beginWindowOperation(starting: MenuStatusLine.restoring) else { return }
-        windowOperation = Task { @MainActor in
-            let message = await self.coordinator?.restoreCurrent() ?? "Window Minder is still starting."
-            self.finishWindowOperation(message)
+        startWindowOperation(fallback: MenuStatusLine.couldNotRestore) { [weak self] in
+            await self?.coordinator?.restoreCurrent(trustConfirmed: true) ?? "Window Minder is still starting."
         }
+    }
+
+    /// Runs the operation and clears the hourglass when it finishes. If it is
+    /// still running after `WindowOperationDeadline.limit`, the hourglass clears
+    /// anyway and the task is cancelled.
+    private func startWindowOperation(
+        fallback: String,
+        work: @escaping @MainActor () async -> String
+    ) {
+        operationSettled = false
+        let token = menuBarGeneration
+        let task = Task { @MainActor in
+            let message = await work()
+            self.finishIfCurrent(token, message)
+        }
+        windowOperation = task
+        Task { @MainActor in
+            let nanoseconds = UInt64(WindowOperationDeadline.limit * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            guard !self.operationSettled, token == self.menuBarGeneration else { return }
+            task.cancel()
+            self.finishIfCurrent(token, fallback)
+        }
+    }
+
+    private func finishIfCurrent(_ token: Int, _ message: String) {
+        guard token == menuBarGeneration, !operationSettled else { return }
+        operationSettled = true
+        finishWindowOperation(message)
     }
 
     func deleteLayout(key: String) {

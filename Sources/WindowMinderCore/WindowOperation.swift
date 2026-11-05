@@ -424,6 +424,13 @@ public enum LayoutOverwrite {
     }
 }
 
+public enum WindowOperationDeadline {
+    /// Longer than the late-window retry, so a restore that finishes still
+    /// reports real counts. A stuck Accessibility call cannot leave the
+    /// hourglass up past this.
+    public static let limit: TimeInterval = 40
+}
+
 public struct RestoreSummary: Equatable, Sendable {
     public var restored: Int
     public var skipped: Int

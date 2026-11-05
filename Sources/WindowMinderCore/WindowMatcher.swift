@@ -135,6 +135,16 @@ public enum WindowMatcher {
     }
 }
 
+public enum RestoreDrive {
+    /// The first pass always moves windows that are open now. A later pass
+    /// stops when the display setup changed, so a flicker cannot skip that
+    /// first move and cannot keep writing after the screens change.
+    public static func shouldRunPass(index: Int, displayKeyChanged: Bool) -> Bool {
+        if index == 0 { return true }
+        return !displayKeyChanged
+    }
+}
+
 public enum LateWindowRetry {
     public static let interval: TimeInterval = 1
     public static let duration: TimeInterval = 30

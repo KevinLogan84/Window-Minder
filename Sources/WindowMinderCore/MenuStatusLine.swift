@@ -14,6 +14,8 @@ public enum MenuStatusLine {
     public static let accessibilityNeeded = "Accessibility access is not granted."
     public static let storing = "Storing windows…"
     public static let restoring = "Restoring windows…"
+    public static let couldNotStore = "Could not store windows."
+    public static let couldNotRestore = "Could not restore windows."
 
     /// `isTransient` means `message` is an action result still inside
     /// `displayInterval`. `replacement` is what should take its place: the

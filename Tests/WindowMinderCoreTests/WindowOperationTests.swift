@@ -251,6 +251,13 @@ final class WindowOperationTests: XCTestCase {
         XCTAssertEqual(summary.message, "Stored 1 window from 1 app. Kept 2 windows that were not open")
     }
 
+    func testWindowOperationDeadlineOutlastsTheRetryAndClearsAStuckRestore() {
+        XCTAssertGreaterThan(WindowOperationDeadline.limit, LateWindowRetry.duration)
+        XCTAssertLessThan(WindowOperationDeadline.limit, DisplayRestoreTiming.wakeLayoutWindow)
+        XCTAssertEqual(MenuStatusLine.couldNotRestore, "Could not restore windows.")
+        XCTAssertEqual(MenuStatusLine.couldNotStore, "Could not store windows.")
+    }
+
     func testRestoreSummaryCounts() {
         XCTAssertEqual(
             RestoreSummary(restored: 12, skipped: 0, failed: 0, unresponsiveAppCount: 0).message,

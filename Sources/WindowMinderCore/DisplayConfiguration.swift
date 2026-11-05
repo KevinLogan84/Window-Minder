@@ -421,6 +421,39 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
         }
     }
 
+    /// A quiet wait or a drag deferral has not been decided yet.
+    /// Manual Restore checks this before cancelling that wait.
+    public var hasPendingAutomaticWait: Bool {
+        switch phase {
+        case .waiting, .deferred:
+            return true
+        case .idle, .restoring:
+            return false
+        }
+    }
+
+    /// The wake subset-wait is still inside its deadline. Manual Restore does not
+    /// block on it; the caller can arm the same wait again after the move.
+    public func missingDisplayWaitIsOpen(at now: TimeInterval) -> Bool {
+        missingDisplayWaitUntil >= 0 && now <= missingDisplayWaitUntil
+    }
+
+    /// Make the current quiet timer stale so a wake subset-wait cannot run
+    /// instead of a manual Restore or hold that Restore behind the wait.
+    /// The missing-display deadline is cleared so a display change is not still
+    /// held for a monitor the user chose not to wait for. Layout files are not touched.
+    public mutating func beginManualRestore() {
+        generation += 1
+        followUp = false
+        missingDisplayWaitUntil = -1
+        switch phase {
+        case .waiting, .deferred, .restoring:
+            phase = .idle
+        case .idle:
+            break
+        }
+    }
+
     /// Decide once the displays have been quiet. A mismatched generation is ignored.
     ///
     /// A wake, screen wake, or unlock whose screens are a strict subset of the
@@ -570,11 +603,14 @@ public enum LayoutCatalog {
     /// the same setup.
     public static func layout(for configuration: DisplayConfiguration, in layouts: [SavedLayout]) -> SavedLayout? {
         guard !configuration.displays.isEmpty else { return nil }
+        // An empty file for the current key must not hide a layout that still
+        // has windows, and it is not a layout to apply. The file stays on disk.
+        let usable = layouts.filter { !$0.windows.isEmpty }
         let key = configuration.key
-        if let exact = newest(layouts.filter { $0.key == key }) {
+        if let exact = newest(usable.filter { $0.key == key }) {
             return exact
         }
-        let recomputed = layouts.filter { candidate in
+        let recomputed = usable.filter { candidate in
             !candidate.displays.isEmpty && DisplayConfiguration(displays: candidate.displays).key == key
         }
         if let match = newest(recomputed) {
@@ -586,7 +622,7 @@ public enum LayoutCatalog {
                 $0.uuid.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             }.filter { !$0.isEmpty }
         )
-        let legacy = layouts.filter { candidate in
+        let legacy = usable.filter { candidate in
             guard !candidate.displays.isEmpty else { return false }
             guard candidate.displays.allSatisfy({ !DisplayIdentity.usesEDID($0) }) else { return false }
             return DisplayConfigKey.geometrySignature(candidate.displays) == geometry

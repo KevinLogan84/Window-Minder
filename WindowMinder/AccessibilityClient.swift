@@ -19,6 +19,22 @@ final class AccessibilityClient {
     /// Last combined decision. Layout reads use this so they do not call
     /// `AXIsProcessTrusted` again and pick up a stale cache.
     private var trusted = false
+    /// Store and restore are inside an Accessibility call. A live trust probe
+    /// must not run at the same time: the two calls can stall each other and
+    /// leave the hourglass up.
+    private var windowWorkDepth = 0
+
+    func beginWindowWork() {
+        windowWorkDepth += 1
+    }
+
+    func endWindowWork() {
+        windowWorkDepth = max(0, windowWorkDepth - 1)
+    }
+
+    var isPerformingWindowWork: Bool {
+        windowWorkDepth > 0
+    }
 
     /// Shows the system prompt once. The returned bool is not the source of truth:
     /// `AXIsProcessTrusted` can stay cached for the life of the process.

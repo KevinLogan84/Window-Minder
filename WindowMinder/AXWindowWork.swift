@@ -3,6 +3,11 @@ import CoreGraphics
 import Foundation
 import os
 
+private final class AXResultBox<T> {
+    var values: [T?]
+    init(count: Int) { values = [T?](repeating: nil, count: count) }
+}
+
 private let windowLogger = Logger(subsystem: WindowMinderIdentity.bundleIdentifier, category: "windows")
 private let windowSignposter = OSSignposter(subsystem: WindowMinderIdentity.bundleIdentifier, category: "windows")
 
@@ -22,8 +27,12 @@ struct AXRestoreReport: Sendable {
     var summary: RestoreSummary
     var elapsedMilliseconds: Int
     var bundlesWithLiveWindows: [String]
-    /// Saved windows that were paired with a live window on this pass.
+    /// Saved windows that moved, or that were left minimized on purpose.
+    /// A window that was found but could not be moved is not included, so the
+    /// caller can retry it.
     var matchedSaved: [WindowRecord]
+    /// Saved windows that were paired with a live window and could not be moved.
+    var failedSaved: [WindowRecord]
 }
 
 /// Accessibility reads and writes. Each app element is used on one task.
@@ -90,13 +99,35 @@ enum AXWindowWork {
         ignoredBundleIdentifiers: Set<String>,
         primaryHeight: Double
     ) async -> AXRestoreReport {
+        // Accessibility calls block. Keep them off the main thread so a trust
+        // probe or the menu cannot sit behind them, and so a stuck call cannot
+        // freeze the hourglass timer.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let report = restoreOffMain(
+                    targets: targets,
+                    saved: saved,
+                    ignoredBundleIdentifiers: ignoredBundleIdentifiers,
+                    primaryHeight: primaryHeight
+                )
+                continuation.resume(returning: report)
+            }
+        }
+    }
+
+    private static func restoreOffMain(
+        targets: [ScanCandidate],
+        saved: [WindowRecord],
+        ignoredBundleIdentifiers: Set<String>,
+        primaryHeight: Double
+    ) -> AXRestoreReport {
         let started = Date()
         let interval = windowSignposter.beginInterval("Restore Windows")
         defer { windowSignposter.endInterval("Restore Windows", interval) }
         let timeout = Float(WindowScanPlan.interactiveTimeoutSeconds)
-        await setSystemWideTimeout(timeout)
+        setSystemWideTimeoutSync(timeout)
         let ignored = ignoredBundleIdentifiers.union([WindowMinderIdentity.bundleIdentifier])
-        let results = await mapApps(targets) { target in
+        let results = mapAppsSync(targets) { target in
             restoreApp(
                 target,
                 saved: saved,
@@ -120,6 +151,7 @@ enum AXWindowWork {
         let elapsed = elapsedMilliseconds(since: started)
         let bundlesWithLiveWindows = results.filter(\.sawWindows).map(\.bundleIdentifier).sorted()
         let matchedSaved = results.flatMap(\.matchedSaved)
+        let failedSaved = results.flatMap(\.failedSaved)
         windowLogger.notice(
             "Restore elapsedMs=\(elapsed, privacy: .public) appsScanned=\(targets.count, privacy: .public) appsTimedOut=\(summary.unresponsiveAppCount, privacy: .public) restored=\(summary.restored, privacy: .public) skipped=\(summary.skipped, privacy: .public) failed=\(summary.failed, privacy: .public) matched=\(matchedSaved.count, privacy: .public)"
         )
@@ -127,7 +159,8 @@ enum AXWindowWork {
             summary: summary,
             elapsedMilliseconds: elapsed,
             bundlesWithLiveWindows: bundlesWithLiveWindows,
-            matchedSaved: matchedSaved
+            matchedSaved: matchedSaved,
+            failedSaved: failedSaved
         )
     }
 
@@ -144,6 +177,7 @@ enum AXWindowWork {
         var timedOut: Bool
         var sawWindows: Bool
         var matchedSaved: [WindowRecord]
+        var failedSaved: [WindowRecord]
     }
 
     private static func captureApp(_ target: ScanCandidate, primaryHeight: Double, timeout: Float) -> AppCapture {
@@ -211,7 +245,8 @@ enum AXWindowWork {
                 failed: 0,
                 timedOut: true,
                 sawWindows: false,
-                matchedSaved: []
+                matchedSaved: [],
+                failedSaved: []
             )
         case .windows(let elements):
             let attributes = elements.map { copyWindowAttributes($0, timeout: timeout) }
@@ -248,6 +283,7 @@ enum AXWindowWork {
             // Only windows that landed are done. One that could not be moved, or that
             // ended up somewhere else, stays pending so the next pass tries it again.
             var settled: [WindowRecord] = []
+            var failedSaved: [WindowRecord] = []
             for match in matches {
                 guard let found = pool.firstIndex(where: { candidate in
                     candidate.window.record.bundleIdentifier == match.live.bundleIdentifier
@@ -256,6 +292,7 @@ enum AXWindowWork {
                         && candidate.window.record.minimized == match.live.minimized
                 }) else {
                     failed += 1
+                    failedSaved.append(match.saved)
                     continue
                 }
                 let liveWindow = pool.remove(at: found)
@@ -282,6 +319,7 @@ enum AXWindowWork {
                         settled.append(match.saved)
                     case .missed:
                         failed += 1
+                        failedSaved.append(match.saved)
                         windowLogger.error(
                             "Could not move \(match.live.bundleIdentifier, privacy: .public) window \(match.live.windowIndex, privacy: .public)"
                         )
@@ -303,7 +341,8 @@ enum AXWindowWork {
                 failed: failed,
                 timedOut: false,
                 sawWindows: !live.isEmpty,
-                matchedSaved: settled
+                matchedSaved: settled,
+                failedSaved: failedSaved
             )
         }
     }
@@ -358,6 +397,32 @@ enum AXWindowWork {
         return boolValue(value)
     }
 
+    private static func mapAppsSync<T>(
+        _ targets: [ScanCandidate],
+        _ body: @escaping (ScanCandidate) -> T
+    ) -> [T] {
+        guard !targets.isEmpty else { return [] }
+        let queue = DispatchQueue(label: "com.kevinlogan.WindowMinder.ax", attributes: .concurrent)
+        let group = DispatchGroup()
+        let lock = NSLock()
+        let slots = DispatchSemaphore(value: WindowScanPlan.maxConcurrentApps)
+        let results = AXResultBox<T>(count: targets.count)
+        for (index, target) in targets.enumerated() {
+            slots.wait()
+            group.enter()
+            queue.async {
+                let value = body(target)
+                lock.lock()
+                results.values[index] = value
+                lock.unlock()
+                slots.signal()
+                group.leave()
+            }
+        }
+        group.wait()
+        return results.values.compactMap { $0 }
+    }
+
     private static func mapApps<T: Sendable>(
         _ targets: [ScanCandidate],
         _ body: @escaping @Sendable (ScanCandidate) -> T
@@ -378,6 +443,11 @@ enum AXWindowWork {
             }
             return collected
         }
+    }
+
+    private static func setSystemWideTimeoutSync(_ timeout: Float) {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, timeout)
     }
 
     private static func setSystemWideTimeout(_ timeout: Float) async {

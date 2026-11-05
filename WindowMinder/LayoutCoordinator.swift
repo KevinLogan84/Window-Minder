@@ -22,10 +22,12 @@ enum LayoutTiming {
 /// Login, wake, screen wake, session unlock, and display reconfiguration share
 /// one debounce in `DisplayRestoreCoalescer`. After a wake, a strict subset of
 /// the pre-wake screens waits for the missing display instead of applying the
-/// smaller layout. Restore reads the layout from disk for the settled display
-/// key and retries windows that are not open yet. The snapshot taken at launch
-/// is the saved layout, not the positions macOS used before those apps opened.
-/// A pointer button that is held down defers that restore until the drag ends.
+/// smaller layout. A manual Restore does not join that wait: it moves the windows
+/// that are open for the displays connected now, then the wait can continue.
+/// Restore reads the layout from disk for that display key and retries windows
+/// that were not moved. The snapshot taken at launch is the saved layout, not
+/// the positions macOS used before those apps opened. A pointer button that is
+/// held down defers an automatic restore until the drag ends.
 @MainActor
 final class LayoutCoordinator {
     var onStatus: @MainActor (String) -> Void = { _ in }
@@ -55,6 +57,12 @@ final class LayoutCoordinator {
     private var lateRetryTask: Task<Void, Never>?
     private var launched = false
     private var coalescer = DisplayRestoreCoalescer()
+    /// Bumped when a manual Restore cancels the quiet timer, so that timer's
+    /// callback cannot start an automatic restore.
+    private var automaticEpoch = 0
+    /// True while a user Restore is in progress. Wake and display signals are
+    /// remembered and applied after it, not instead of it.
+    private var manualRestoreActive = false
     /// Screens that were connected when this wake started. Frozen so a partial
     /// restore cannot forget the setup we are waiting to complete.
     private var wakeBaselineTokens: [String] = []
@@ -217,9 +225,25 @@ final class LayoutCoordinator {
 
     /// `announceWhenIdle` is for an explicit Restore. Automatic restore stays quiet when
     /// there is nothing to do, so a display change does not fill the menu with status text.
+    /// `trustConfirmed` means the caller just probed Accessibility and it worked, so a
+    /// later probe must not turn this Restore into a no-op.
     @discardableResult
-    func restoreCurrent(announceWhenIdle: Bool = true) async -> String {
-        guard accessibility.isTrusted else {
+    func restoreCurrent(announceWhenIdle: Bool = true, trustConfirmed: Bool = false) async -> String {
+        let resumeAutomaticWait = announceWhenIdle
+            && coalescer.hasPendingAutomaticWait
+            && coalescer.missingDisplayWaitIsOpen(at: monotonicNow())
+        if announceWhenIdle {
+            preemptAutomaticRestore()
+        }
+        defer {
+            if announceWhenIdle {
+                manualRestoreActive = false
+                if resumeAutomaticWait {
+                    noteDisplaySignal(.wake)
+                }
+            }
+        }
+        guard trustConfirmed || accessibility.isTrusted else {
             return announceWhenIdle ? "Accessibility access is not granted." : ""
         }
         let configuration = displays.current()
@@ -232,13 +256,10 @@ final class LayoutCoordinator {
         }
         let layout: SavedLayout
         do {
-            if let exact = try store.load(key: configuration.key) {
-                layout = exact
-            } else if let matched = LayoutCatalog.layout(for: configuration, in: try store.list()) {
-                layout = matched
-            } else {
+            guard let matched = try savedLayout(for: configuration) else {
                 return announceWhenIdle ? "No saved layout for this display setup." : ""
             }
+            layout = matched
         } catch {
             return error.localizedDescription
         }
@@ -254,18 +275,28 @@ final class LayoutCoordinator {
         lateRetryTask?.cancel()
         lateRetryTask = nil
         await acquireAX()
+        if Task.isCancelled {
+            releaseAX()
+            return announceWhenIdle ? MenuStatusLine.couldNotRestore : ""
+        }
         let applyGeneration = displayGeneration
         suppressDisplayReaction = true
         let ignored = settings().ignoredBundleIdentifiers
         var report: AXRestoreReport?
-        if !Task.isCancelled, displays.current().key == configuration.key, displays.primaryHeight() > 0 {
+        // A manual Restore always moves the windows that are open now, even if the
+        // display key flickered; an automatic one waits for the next settled setup.
+        let keyChanged = displays.current().key != configuration.key
+        let passHeight = displays.primaryHeight()
+        let heightForPass = passHeight > 0 ? passHeight : height
+        if !Task.isCancelled, announceWhenIdle || !keyChanged, heightForPass > 0 {
             report = await AXWindowWork.restore(
                 targets: accessibility.scanTargets(ignoredBundleIdentifiers: ignored),
                 saved: placed,
                 ignoredBundleIdentifiers: ignored,
-                primaryHeight: displays.primaryHeight()
+                primaryHeight: heightForPass
             )
-        } else {
+        }
+        if keyChanged {
             displayChangePending = true
         }
         releaseAX()
@@ -428,7 +459,27 @@ final class LayoutCoordinator {
         noteDisplaySignal(.displayChange)
     }
 
+    /// Stop the quiet timer and any automatic restore that is holding Accessibility.
+    /// A manual Restore then moves the current setup immediately. The subset wait
+    /// is not deleted: `restoreCurrent` arms it again after the move when it is
+    /// still inside the wake window.
+    private func preemptAutomaticRestore() {
+        manualRestoreActive = true
+        automaticEpoch += 1
+        screenWork?.cancel()
+        screenWork = nil
+        dragWatch?.invalidate()
+        dragWatch = nil
+        displayTask?.cancel()
+        displayGeneration += 1
+        coalescer.beginManualRestore()
+    }
+
     private func noteDisplaySignal(_ signal: DisplayRestoreCoalescer.Signal) {
+        if manualRestoreActive {
+            displayChangePending = true
+            return
+        }
         if signal.waitsForMissingDisplays, !wakeBaselineReady, let snapshot, !snapshot.configuration.displays.isEmpty {
             wakeBaselineTokens = snapshot.configuration.displays.map { DisplayIdentity.token(for: $0) }
             wakeBaselineHasLayout = hasSavedLayout(for: snapshot.configuration)
@@ -457,8 +508,11 @@ final class LayoutCoordinator {
         guard self.displayGeneration == generation else {
             // A newer quiet wait owns the next decision. Drop this apply's
             // suppression so later display events still reach that wait.
-            suppressDisplayReaction = false
-            displayChangePending = false
+            // A manual Restore that superseded this apply keeps its own suppression.
+            if !manualRestoreActive {
+                suppressDisplayReaction = false
+                displayChangePending = false
+            }
             return
         }
         suppressDisplayReaction = false
@@ -505,10 +559,12 @@ final class LayoutCoordinator {
         screenWork?.cancel()
         lateRetryTask?.cancel()
         lateRetryTask = nil
+        let epoch = automaticEpoch
         displayGeneration += 1
         let work = DispatchWorkItem { [weak self] in
             guard let coordinator = self else { return }
             MainActor.assumeIsolated {
+                guard coordinator.automaticEpoch == epoch, !coordinator.manualRestoreActive else { return }
                 coordinator.commitSettledConfiguration(generation: generation)
             }
         }
@@ -625,6 +681,7 @@ final class LayoutCoordinator {
     private func startSettledRestore(configuration: DisplayConfiguration, notes: [String]) {
         displayGeneration += 1
         let generation = displayGeneration
+        let epoch = automaticEpoch
         displayTask?.cancel()
         displayTask = Task { @MainActor in
             defer {
@@ -632,8 +689,9 @@ final class LayoutCoordinator {
                     self.displayTask = nil
                 }
             }
+            guard self.automaticEpoch == epoch, !self.manualRestoreActive else { return }
             let message = await self.restoreCurrent(announceWhenIdle: false)
-            guard !Task.isCancelled, self.displayGeneration == generation else { return }
+            guard !Task.isCancelled, self.automaticEpoch == epoch, self.displayGeneration == generation else { return }
             if !message.isEmpty {
                 let combined = (notes + [message]).joined(separator: " ")
                 self.onStatus(combined)
@@ -661,10 +719,7 @@ final class LayoutCoordinator {
     private func hasSavedLayout(for configuration: DisplayConfiguration) -> Bool {
         guard !configuration.displays.isEmpty else { return false }
         do {
-            if try store.load(key: configuration.key) != nil {
-                return true
-            }
-            return LayoutCatalog.layout(for: configuration, in: try store.list()) != nil
+            return try savedLayout(for: configuration) != nil
         } catch {
             layoutLogger.error(
                 "Could not read saved layouts before auto-restore: \(error.localizedDescription, privacy: .public)"
@@ -782,6 +837,7 @@ final class LayoutCoordinator {
     private func acquireAX() async {
         if !axLock {
             axLock = true
+            accessibility.beginWindowWork()
             return
         }
         await withCheckedContinuation { continuation in
@@ -792,6 +848,7 @@ final class LayoutCoordinator {
     private func releaseAX() {
         if axWaiters.isEmpty {
             axLock = false
+            accessibility.endWindowWork()
             return
         }
         let next = axWaiters.removeFirst()

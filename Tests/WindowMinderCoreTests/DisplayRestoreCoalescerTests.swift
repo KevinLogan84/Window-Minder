@@ -343,6 +343,65 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
         XCTAssertEqual(script.coalescer.lastDecisionReason, .subsetTimedOut)
     }
 
+    func testManualRestoreDoesNotKeepWaitingForAMissingDisplay() {
+        var coalescer = DisplayRestoreCoalescer()
+        guard case .arm(let generation) = coalescer.note(.wake, at: 0) else {
+            return XCTFail("Wake should arm one quiet wait")
+        }
+        let waiting = coalescer.evaluate(
+            generation,
+            probe(
+                key: "laptop",
+                keyChanged: true,
+                now: DisplayRestoreTiming.debounce,
+                currentTokens: ["built-in"],
+                preWakeTokens: ["built-in", "lu28r55"],
+                preWakeHasSavedLayout: true
+            )
+        )
+        guard case .waitForDisplays(let armed) = waiting else {
+            return XCTFail("A subset should wait, got \(waiting)")
+        }
+        XCTAssertTrue(coalescer.hasPendingAutomaticWait)
+        XCTAssertTrue(coalescer.missingDisplayWaitIsOpen(at: 10))
+
+        coalescer.beginManualRestore()
+        XCTAssertFalse(coalescer.hasPendingAutomaticWait)
+        XCTAssertEqual(
+            coalescer.evaluate(
+                armed,
+                probe(
+                    key: "laptop",
+                    keyChanged: true,
+                    now: 10,
+                    currentTokens: ["built-in"],
+                    preWakeTokens: ["built-in", "lu28r55"],
+                    preWakeHasSavedLayout: true
+                )
+            ),
+            .skip
+        )
+
+        // The deadline is still open, but a manual Restore must not be held for it.
+        // A later display change applies the screens that are connected now.
+        guard case .arm(let next) = coalescer.note(.displayChange, at: 12) else {
+            return XCTFail("A display change after manual restore should arm")
+        }
+        let decision = coalescer.evaluate(
+            next,
+            probe(
+                key: "laptop",
+                keyChanged: true,
+                now: 12 + DisplayRestoreTiming.debounce,
+                currentTokens: ["built-in"],
+                preWakeTokens: ["built-in", "lu28r55"],
+                preWakeHasSavedLayout: true
+            )
+        )
+        XCTAssertEqual(decision, .restore(key: "laptop", generation: next))
+        XCTAssertEqual(coalescer.lastDecisionReason, .keyChanged)
+    }
+
     func testDisplayChangeThatIsNotAWakeSubsetRestoresImmediately() {
         var script = Script()
         script.signal(.displayChange, at: 0)
