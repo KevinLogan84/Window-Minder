@@ -16,6 +16,7 @@ struct DisplayCatalog {
             let uuid = uuidString(for: displayID) ?? ""
             let hasEDID = vendor != 0 && product != 0
             if uuid.isEmpty && !hasEDID { continue }
+            if DisplayIdentity.isPlaceholder(vendorID: vendor, productID: product) { continue }
             let frame = screen.frame
             let name = screen.localizedName.trimmingCharacters(in: .whitespacesAndNewlines)
             displays.append(
@@ -37,6 +38,23 @@ struct DisplayCatalog {
             )
         }
         return DisplayConfiguration(displays: displays)
+    }
+
+    /// True while no real screen is connected: nothing online, or only the stand-in
+    /// screen macOS shows while a monitor wakes. Core Graphics is asked directly,
+    /// because `NSScreen` can lag behind it by a run loop turn.
+    func isDisturbed() -> Bool {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success else { return false }
+        let online = ids.prefix(Int(count))
+        if online.isEmpty { return true }
+        if online.contains(where: {
+            DisplayIdentity.isPlaceholder(vendorID: CGDisplayVendorNumber($0), productID: CGDisplayModelNumber($0))
+        }) {
+            return true
+        }
+        return current().displays.isEmpty
     }
 
     /// Height of the display whose bottom-left is the Cocoa origin.

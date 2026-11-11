@@ -93,6 +93,21 @@ public enum DisplayIdentity {
         )
     }
 
+    /// macOS shows a stand-in 1920 x 1080 screen (vendor 'unkn', product 'virt') for a
+    /// few seconds while a monitor wakes or reconnects, and on a Mac with no monitor.
+    /// Windows are squeezed onto it and then put back. It is not a display setup:
+    /// nothing is saved for it and nothing is restored onto it.
+    public static let placeholderVendorID: UInt32 = 0x756E_6B6E
+    public static let placeholderProductID: UInt32 = 0x7669_7274
+
+    public static func isPlaceholder(vendorID: UInt32?, productID: UInt32?) -> Bool {
+        vendorID == placeholderVendorID && productID == placeholderProductID
+    }
+
+    public static func isPlaceholder(_ display: DisplayDescriptor) -> Bool {
+        isPlaceholder(vendorID: display.vendorID, productID: display.productID)
+    }
+
     public static func usesEDID(vendorID: UInt32?, productID: UInt32?) -> Bool {
         guard let vendorID, let productID else { return false }
         return vendorID != 0 && productID != 0
@@ -442,6 +457,14 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
     /// instead of a manual Restore or hold that Restore behind the wait.
     /// The missing-display deadline is cleared so a display change is not still
     /// held for a monitor the user chose not to wait for. Layout files are not touched.
+    /// True from a `.restore` decision until `restoreFinished`. A restore that was
+    /// decided but could not start must still call `restoreFinished`, or every later
+    /// wake and display change is coalesced into a restore that never ends.
+    public var isRestoring: Bool {
+        if case .restoring = phase { return true }
+        return false
+    }
+
     public mutating func beginManualRestore() {
         generation += 1
         followUp = false

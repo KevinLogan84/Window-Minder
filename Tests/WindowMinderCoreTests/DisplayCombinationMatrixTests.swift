@@ -364,4 +364,96 @@ final class DisplayCombinationMatrixTests: XCTestCase {
         XCTAssertEqual(WindowPlacement.fitting(onLG, into: areas), onLG)
         XCTAssertEqual(WindowPlacement.fitting(huge, into: []), huge)
     }
+
+    // MARK: The stand-in screen macOS shows while a monitor wakes
+
+    func testPlaceholderScreenIsRecognised() {
+        // 'unkn' / 'virt', as reported by Core Graphics for the 1920 x 1080 stand-in.
+        XCTAssertTrue(DisplayIdentity.isPlaceholder(vendorID: 1_970_170_734, productID: 1_986_622_068))
+        let standIn = DisplayDescriptor(
+            uuid: "00000000-0000-0000-0000-00000000F001",
+            frame: WMRect(x: 0, y: 0, width: 1920, height: 1080),
+            pixelWidth: 1920, pixelHeight: 1080,
+            vendorID: 1_970_170_734, productID: 1_986_622_068, serialNumber: 0
+        )
+        XCTAssertTrue(DisplayIdentity.isPlaceholder(standIn))
+        for setup in Self.setups {
+            for display in setup.displays {
+                XCTAssertFalse(DisplayIdentity.isPlaceholder(display), setup.name)
+            }
+        }
+        XCTAssertFalse(DisplayIdentity.isPlaceholder(vendorID: nil, productID: nil))
+    }
+
+    /// Monitor sleeps and wakes: screens wake, the stand-in shows (no real screens),
+    /// then the same monitor returns. The layout is applied once, when it is back.
+    func testWakeThroughPlaceholderRestoresWhenTheMonitorReturns() {
+        for setup in Self.setups {
+            var coalescer = DisplayRestoreCoalescer()
+            guard case .arm(let first) = coalescer.note(.screensWake, at: 100) else { return XCTFail() }
+            let waiting = coalescer.evaluate(first, probe(
+                nil, hasLayout: false, keyChanged: true, now: 101.5,
+                before: setup, beforeHasLayout: true
+            ))
+            guard case .waitForDisplays = waiting else {
+                XCTFail("\(setup.name): expected wait, got \(waiting)")
+                continue
+            }
+            guard case .arm(let second) = coalescer.note(.displayChange, at: 103) else { return XCTFail() }
+            // The coordinator reports keyChanged because the screens went away in between.
+            let decision = coalescer.evaluate(second, probe(
+                setup, hasLayout: true, keyChanged: true, now: 104.5,
+                before: setup, beforeHasLayout: true
+            ))
+            XCTAssertEqual(decision, .restore(key: setup.key, generation: second), setup.name)
+        }
+    }
+
+    /// Monitor blinks while the Mac is awake (power cycle, input switch): no wake signal.
+    func testBlinkWithoutWakeRestoresWhenTheMonitorReturns() {
+        for setup in Self.setups {
+            var coalescer = DisplayRestoreCoalescer()
+            guard case .arm(let first) = coalescer.note(.displayChange, at: 5_000) else { return XCTFail() }
+            XCTAssertEqual(coalescer.evaluate(first, probe(
+                nil, hasLayout: false, keyChanged: true, now: 5_001.5,
+                before: setup, beforeHasLayout: true
+            )), .skip, setup.name)
+            guard case .arm(let second) = coalescer.note(.displayChange, at: 5_010) else { return XCTFail() }
+            let decision = coalescer.evaluate(second, probe(
+                setup, hasLayout: true, keyChanged: true, now: 5_011.5,
+                before: setup, beforeHasLayout: true
+            ))
+            XCTAssertEqual(decision, .restore(key: setup.key, generation: second), setup.name)
+        }
+    }
+
+    func testSnapshotTakenAsDisplaysChangeIsNotTrusted() {
+        let now = Date()
+        XCTAssertFalse(SnapshotSchedule.isSettled(capturedAt: now.addingTimeInterval(-0.3), now: now))
+        XCTAssertFalse(SnapshotSchedule.isSettled(capturedAt: now.addingTimeInterval(-1.9), now: now))
+        XCTAssertTrue(SnapshotSchedule.isSettled(capturedAt: now.addingTimeInterval(-2), now: now))
+        XCTAssertTrue(SnapshotSchedule.isSettled(capturedAt: now.addingTimeInterval(-12), now: now))
+    }
+
+    /// A restore that was decided but could not start (Accessibility not granted yet,
+    /// screens not ready) must not swallow every later wake.
+    func testAbandonedRestoreDoesNotBlockLaterSignals() {
+        let setup = Self.setups[1]
+        var coalescer = DisplayRestoreCoalescer()
+        guard case .arm(let first) = coalescer.note(.displayChange, at: 10) else { return XCTFail() }
+        XCTAssertEqual(coalescer.evaluate(first, probe(
+            setup, hasLayout: true, keyChanged: true, now: 11.5, before: setup, beforeHasLayout: true
+        )), .restore(key: setup.key, generation: first))
+        XCTAssertTrue(coalescer.isRestoring)
+        // While it is restoring, signals are coalesced. This is the stuck state.
+        guard case .coalesced = coalescer.note(.screensWake, at: 12) else { return XCTFail("expected coalesced") }
+        _ = coalescer.restoreFinished()
+        XCTAssertFalse(coalescer.isRestoring)
+        guard case .arm(let second) = coalescer.note(.screensWake, at: 200) else {
+            return XCTFail("a wake after the restore ended must arm")
+        }
+        XCTAssertEqual(coalescer.evaluate(second, probe(
+            setup, hasLayout: true, keyChanged: false, now: 201.5, before: setup, beforeHasLayout: true
+        )), .restore(key: setup.key, generation: second))
+    }
 }

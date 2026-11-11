@@ -55,6 +55,12 @@ final class LayoutCoordinator {
     private var suppressDisplayReaction = false
     private var displayTask: Task<Void, Never>?
     private var lateRetryTask: Task<Void, Never>?
+    /// The real screens went away, or the stand-in screen showed, since the last
+    /// settled decision. macOS squeezes windows when that happens, so the layout is
+    /// applied again even when the same setup comes back.
+    private var displaysDisturbed = false
+    /// The snapshot before the newest one, for the same setup.
+    private var priorSnapshot: Snapshot?
     private var launched = false
     private var coalescer = DisplayRestoreCoalescer()
     /// Bumped when a manual Restore cancels the quiet timer, so that timer's
@@ -120,8 +126,11 @@ final class LayoutCoordinator {
         }
     }
 
+    /// Layouts written for the stand-in screen by earlier versions are not listed.
     func savedLayouts() throws -> [SavedLayout] {
-        try store.list()
+        try store.list().filter { layout in
+            layout.displays.isEmpty || !layout.displays.allSatisfy { DisplayIdentity.isPlaceholder($0) }
+        }
     }
 
     func delete(key: String) throws {
@@ -211,6 +220,7 @@ final class LayoutCoordinator {
         }
         if acceptingSnapshots, displays.current().key == configuration.key {
             lastSnapshotAt = layout.savedAt
+            priorSnapshot = nil
             snapshot = Snapshot(configuration: configuration, windows: layout.windows, capturedAt: layout.savedAt)
         }
         onLayoutsChanged()
@@ -304,6 +314,7 @@ final class LayoutCoordinator {
         if !Task.isCancelled, displays.current().key == configuration.key {
             let capturedAt = Date()
             lastSnapshotAt = capturedAt
+            priorSnapshot = nil
             snapshot = Snapshot(configuration: configuration, windows: placed, capturedAt: capturedAt)
         }
         guard let report else { return announceWhenIdle ? "The displays changed. Restore will run again." : "" }
@@ -448,7 +459,25 @@ final class LayoutCoordinator {
         DispatchQueue.main.asyncAfter(deadline: .now() + SnapshotSchedule.activityDelay, execute: work)
     }
 
+    /// Called on every display or wake signal, before anything else reacts to it.
+    private func noteDisturbance() {
+        if displays.isDisturbed(), !displaysDisturbed {
+            displaysDisturbed = true
+            layoutLogger.notice("Displays went away or the stand-in screen appeared")
+        }
+        guard displaysDisturbed else { return }
+        // A snapshot taken in the last moments may hold windows that macOS has squeezed
+        // onto the stand-in screen, or is still putting back. Use the one before it.
+        if let snapshot, !SnapshotSchedule.isSettled(capturedAt: snapshot.capturedAt, now: Date()),
+           let priorSnapshot, priorSnapshot.configuration.key == snapshot.configuration.key {
+            layoutLogger.notice("Dropped a snapshot taken as the displays changed")
+            self.snapshot = priorSnapshot
+            self.priorSnapshot = nil
+        }
+    }
+
     private func screenParametersChanged() {
+        noteDisturbance()
         guard !suppressDisplayReaction else {
             displayChangePending = true
             acceptingSnapshots = false
@@ -476,6 +505,7 @@ final class LayoutCoordinator {
     }
 
     private func noteDisplaySignal(_ signal: DisplayRestoreCoalescer.Signal) {
+        noteDisturbance()
         if manualRestoreActive {
             displayChangePending = true
             return
@@ -521,7 +551,8 @@ final class LayoutCoordinator {
         let current = displays.current()
         // Empty means the displays have not come back yet, so keep waiting.
         // The same key is not a second restore.
-        let keyChanged = pending && (current.displays.isEmpty || current.key != restoredConfigurationKey)
+        let keyChanged = pending
+            && (current.displays.isEmpty || current.key != restoredConfigurationKey || displaysDisturbed)
         var armedFollowUp = false
         if keyChanged {
             switch coalescer.note(.displayChange, at: monotonicNow()) {
@@ -576,7 +607,11 @@ final class LayoutCoordinator {
         guard coalescer.accepts(generation) else { return }
         let newConfiguration = displays.current()
         let previous = snapshot
+        if displays.isDisturbed() { displaysDisturbed = true }
+        let settledOnRealDisplays = !newConfiguration.displays.isEmpty
+        // The same setup coming back after the screens went away still needs a restore.
         let keyChanged = previous?.configuration.key != newConfiguration.key
+            || (displaysDisturbed && settledOnRealDisplays)
         let autoRestore = settings().autoRestore
         let currentTokens = newConfiguration.displays.map { DisplayIdentity.token(for: $0) }
         let preWakeTokens: [String]
@@ -613,6 +648,7 @@ final class LayoutCoordinator {
             watchForDragEnd(generation: generation)
         case .skip:
             clearWakeBaseline()
+            if settledOnRealDisplays { displaysDisturbed = false }
             let notes = savePreviousLayoutIfNeeded(previous: previous, current: newConfiguration)
             if !notes.isEmpty {
                 onStatus(notes.joined(separator: " "))
@@ -620,6 +656,10 @@ final class LayoutCoordinator {
             resumeSnapshots(for: newConfiguration)
         case .restore:
             clearWakeBaseline()
+            displaysDisturbed = false
+            // The same setup is back. Write where the windows were just before it went
+            // away, so the restore uses those positions and not an older saved file.
+            _ = savePreviousLayoutIfNeeded(previous: previous, current: newConfiguration, sameSetup: true)
             let notes = savePreviousLayoutIfNeeded(previous: previous, current: newConfiguration)
             if !notes.isEmpty {
                 onStatus(notes.joined(separator: " "))
@@ -691,6 +731,19 @@ final class LayoutCoordinator {
             }
             guard self.automaticEpoch == epoch, !self.manualRestoreActive else { return }
             let message = await self.restoreCurrent(announceWhenIdle: false)
+            if self.coalescer.isRestoring, self.automaticEpoch == epoch, self.displayGeneration == generation {
+                // The restore returned before it moved anything (Accessibility not granted
+                // yet, no screens ready, nothing saved). Release it so later signals count.
+                layoutLogger.notice("Restore did not start: \(message, privacy: .public)")
+                if self.displays.isDisturbed() { self.displaysDisturbed = true }
+                switch self.coalescer.restoreFinished() {
+                case .arm(let quietGeneration):
+                    self.beginQuietWait(generation: quietGeneration)
+                    return
+                case .idle:
+                    break
+                }
+            }
             guard !Task.isCancelled, self.automaticEpoch == epoch, self.displayGeneration == generation else { return }
             if !message.isEmpty {
                 let combined = (notes + [message]).joined(separator: " ")
@@ -728,11 +781,15 @@ final class LayoutCoordinator {
         }
     }
 
-    private func savePreviousLayoutIfNeeded(previous: Snapshot?, current: DisplayConfiguration) -> [String] {
+    private func savePreviousLayoutIfNeeded(
+        previous: Snapshot?,
+        current: DisplayConfiguration,
+        sameSetup: Bool = false
+    ) -> [String] {
         guard settings().saveBeforeDisplayChange,
               let previous,
               !previous.configuration.displays.isEmpty,
-              previous.configuration.key != current.key
+              (previous.configuration.key == current.key) == sameSetup
         else {
             return []
         }
@@ -801,6 +858,11 @@ final class LayoutCoordinator {
         }
         let capturedAt = Date()
         lastSnapshotAt = capturedAt
+        if let previous = snapshot, previous.configuration.key == configuration.key {
+            priorSnapshot = previous
+        } else {
+            priorSnapshot = nil
+        }
         snapshot = Snapshot(configuration: configuration, windows: windows, capturedAt: capturedAt)
     }
 

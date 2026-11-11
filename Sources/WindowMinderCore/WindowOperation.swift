@@ -76,6 +76,14 @@ public enum SnapshotSchedule {
     /// Ignore a new request that arrives while the last snapshot is still fresh.
     public static let minimumGap: TimeInterval = 4
 
+    /// A snapshot this young when the displays start changing may already hold
+    /// windows that macOS has squeezed onto the stand-in screen. The one before it is used.
+    public static let settleInterval: TimeInterval = 2
+
+    public static func isSettled(capturedAt: Date, now: Date, settleInterval: TimeInterval = settleInterval) -> Bool {
+        now.timeIntervalSince(capturedAt) >= settleInterval
+    }
+
     public static func shouldCapture(lastCapture: Date?, now: Date, minimumGap: TimeInterval = minimumGap) -> Bool {
         guard let lastCapture else { return true }
         return now.timeIntervalSince(lastCapture) >= minimumGap
