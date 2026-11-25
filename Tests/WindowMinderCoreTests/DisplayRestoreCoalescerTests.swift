@@ -402,6 +402,51 @@ final class DisplayRestoreCoalescerTests: XCTestCase {
         XCTAssertEqual(coalescer.lastDecisionReason, .keyChanged)
     }
 
+    func testReturningDisplayAfterManualRestoreStillRestoresWithinOriginalWakeWindow() {
+        var coalescer = DisplayRestoreCoalescer()
+        guard case .arm(let first) = coalescer.note(.wake, at: 0) else {
+            return XCTFail("Wake should arm one quiet wait")
+        }
+        guard case .waitForDisplays = coalescer.evaluate(
+            first,
+            probe(
+                key: "laptop",
+                keyChanged: true,
+                now: DisplayRestoreTiming.debounce,
+                currentTokens: ["built-in"],
+                preWakeTokens: ["built-in", "lu28r55"],
+                preWakeHasSavedLayout: true
+            )
+        ) else {
+            return XCTFail("A subset should wait for the missing display")
+        }
+
+        // User manually restores at t = 10; the subset wait is preempted without
+        // extending the wake deadline.
+        coalescer.beginManualRestore()
+        XCTAssertFalse(coalescer.missingDisplayWaitIsOpen(at: 10))
+
+        // When the missing display reconnects at t = 35 (inside the original 90s wake
+        // window), its displayChange restores the full setup even if the key matches
+        // the pre-wake snapshot (keyChanged == false).
+        guard case .arm(let reconnect) = coalescer.note(.displayChange, at: 35) else {
+            return XCTFail("Returning display should arm")
+        }
+        let restored = coalescer.evaluate(
+            reconnect,
+            probe(
+                key: "desk",
+                keyChanged: false,
+                now: 35 + DisplayRestoreTiming.debounce,
+                currentTokens: ["built-in", "lu28r55"],
+                preWakeTokens: ["built-in", "lu28r55"],
+                preWakeHasSavedLayout: true
+            )
+        )
+        XCTAssertEqual(restored, .restore(key: "desk", generation: reconnect))
+        XCTAssertEqual(coalescer.lastDecisionReason, .wakeRestore)
+    }
+
     func testDisplayChangeThatIsNotAWakeSubsetRestoresImmediately() {
         var script = Script()
         script.signal(.displayChange, at: 0)

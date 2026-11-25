@@ -138,6 +138,9 @@ open class NSWindow: NSResponder {
     open func makeKey() {}
     open func resignKey() {}
     open func setFrame(_ frameRect: NSRect, display flag: Bool) {}
+
+    public static let willCloseNotification = Notification.Name("NSWindowWillCloseNotification")
+    public static let didResignKeyNotification = Notification.Name("NSWindowDidResignKeyNotification")
 }
 
 public protocol NSApplicationDelegate: AnyObject {
@@ -201,6 +204,7 @@ public struct NSDeviceDescriptionKey: Hashable, RawRepresentable, Sendable {
 open class NSScreen: NSObject {
     open class var screens: [NSScreen] { [] }
     open var frame: NSRect { .zero }
+    open var visibleFrame: NSRect { .zero }
     open var localizedName: String { "" }
     open var deviceDescription: [NSDeviceDescriptionKey: Any] { [:] }
 }

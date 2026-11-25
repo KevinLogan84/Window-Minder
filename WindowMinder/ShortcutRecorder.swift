@@ -113,16 +113,24 @@ private final class KeyMonitorView: NSView {
     }
 
     private var monitor: Any?
+    private var windowObservers: [NSObjectProtocol] = []
     private static weak var active: KeyMonitorView?
 
     override func isAccessibilityElement() -> Bool { false }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil, isRecording {
+            cancelRecording()
+        }
+    }
+
     private func start() {
         if let other = Self.active, other !== self {
-            other.stop()
-            other.onStopped?()
+            other.cancelRecording()
         }
         Self.active = self
+        observeWindowLifecycle()
         guard monitor == nil else { return }
         // The handler is @Sendable and must return before the event is delivered.
         // AppKit calls it on the main thread.
@@ -136,7 +144,45 @@ private final class KeyMonitorView: NSView {
         }
     }
 
+    private func observeWindowLifecycle() {
+        removeWindowObservers()
+        guard let window else { return }
+        let names: [Notification.Name] = [
+            NSWindow.willCloseNotification,
+            NSWindow.didResignKeyNotification,
+        ]
+        for name in names {
+            let token = NotificationCenter.default.addObserver(
+                forName: name,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                guard let view = self else { return }
+                MainActor.assumeIsolated {
+                    view.cancelRecording()
+                }
+            }
+            windowObservers.append(token)
+        }
+    }
+
+    private func removeWindowObservers() {
+        for token in windowObservers {
+            NotificationCenter.default.removeObserver(token)
+        }
+        windowObservers.removeAll()
+    }
+
+    private func cancelRecording() {
+        let wasRecording = isRecording || monitor != nil
+        stop()
+        if wasRecording {
+            onStopped?()
+        }
+    }
+
     private func stop() {
+        removeWindowObservers()
         if let monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
@@ -148,9 +194,13 @@ private final class KeyMonitorView: NSView {
 
     deinit {
         let monitor = self.monitor
+        let observers = self.windowObservers
         let view = self
         // The view is released on the main thread. deinit itself is nonisolated.
         MainActor.assumeIsolated {
+            for token in observers {
+                NotificationCenter.default.removeObserver(token)
+            }
             if let monitor {
                 NSEvent.removeMonitor(monitor)
             }

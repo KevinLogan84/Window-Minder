@@ -614,6 +614,18 @@ public struct DisplayRestoreCoalescer: Equatable, Sendable {
         phase = .waiting(wakeLike: false)
         return .arm(generation: generation)
     }
+
+    /// A decided restore returned before moving any windows (for example,
+    /// Accessibility was not granted yet or no screens were ready). Release
+    /// the restoring phase and clear `satisfiedKey` so the same setup is not
+    /// suppressed by `sameSetupCoalesce` when it becomes ready moments later.
+    public mutating func restoreAborted() -> Finished {
+        if case .restoring(let key) = phase, satisfiedKey == key {
+            satisfiedKey = nil
+            satisfiedUntil = -1
+        }
+        return restoreFinished()
+    }
 }
 
 public enum LayoutCatalog {

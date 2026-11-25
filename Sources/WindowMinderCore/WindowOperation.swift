@@ -33,11 +33,12 @@ public enum WindowScanFilter {
     public static func shouldScan(
         _ candidate: ScanCandidate,
         ignoredBundleIdentifiers: Set<String>,
-        ownBundleIdentifier: String = WindowMinderIdentity.bundleIdentifier
+        ownBundleIdentifier: String = WindowMinderIdentity.bundleIdentifier,
+        includeHidden: Bool = false
     ) -> Bool {
         guard candidate.processIdentifier > 0 else { return false }
         guard !candidate.isTerminated else { return false }
-        guard !candidate.isHidden else { return false }
+        if !includeHidden, candidate.isHidden { return false }
         guard candidate.activationPolicy == .regular else { return false }
         let bundle = candidate.bundleIdentifier
         guard !bundle.isEmpty else { return false }
@@ -50,7 +51,8 @@ public enum WindowScanFilter {
     public static func appsToScan(
         _ candidates: [ScanCandidate],
         ignoredBundleIdentifiers: Set<String>,
-        ownBundleIdentifier: String = WindowMinderIdentity.bundleIdentifier
+        ownBundleIdentifier: String = WindowMinderIdentity.bundleIdentifier,
+        includeHidden: Bool = false
     ) -> [ScanCandidate] {
         var seen = Set<String>()
         var result: [ScanCandidate] = []
@@ -58,13 +60,34 @@ public enum WindowScanFilter {
         where shouldScan(
             candidate,
             ignoredBundleIdentifiers: ignoredBundleIdentifiers,
-            ownBundleIdentifier: ownBundleIdentifier
+            ownBundleIdentifier: ownBundleIdentifier,
+            includeHidden: includeHidden
         ) {
             if seen.insert(candidate.bundleIdentifier).inserted {
                 result.append(candidate)
             }
         }
         return result
+    }
+
+    /// Running apps that have at least one saved window to restore.
+    /// Hidden apps (`Cmd+H`) stay included so their windows are moved instead of
+    /// spinning in late retries; unrelated running apps are excluded so Restore
+    /// never queries them or toggles their `AXEnhancedUserInterface`.
+    public static func appsToRestore(
+        _ candidates: [ScanCandidate],
+        saved: [WindowRecord],
+        ignoredBundleIdentifiers: Set<String>,
+        ownBundleIdentifier: String = WindowMinderIdentity.bundleIdentifier
+    ) -> [ScanCandidate] {
+        let wantedBundles = Set(saved.map(\.bundleIdentifier).filter { !$0.isEmpty })
+        guard !wantedBundles.isEmpty else { return [] }
+        return appsToScan(
+            candidates,
+            ignoredBundleIdentifiers: ignoredBundleIdentifiers,
+            ownBundleIdentifier: ownBundleIdentifier,
+            includeHidden: true
+        ).filter { wantedBundles.contains($0.bundleIdentifier) }
     }
 }
 
@@ -206,6 +229,13 @@ public enum RestoreFramePlan {
     public static let maxCorrectionPasses = 2
     /// Points of slack when comparing the read-back frame with the target.
     public static let tolerance: Double = 2
+    /// Exiting native fullscreen triggers a Space animation during which
+    /// Accessibility ignores frame writes. Poll briefly until the transition finishes.
+    public static let fullscreenExitPollInterval: TimeInterval = 0.05
+    public static let fullscreenExitTimeout: TimeInterval = 1.0
+    /// Unminimizing also animates briefly before accepting frame updates cleanly.
+    public static let unminimizePollInterval: TimeInterval = 0.03
+    public static let unminimizeTimeout: TimeInterval = 0.3
 
     public enum Landing: Equatable, Sendable {
         /// Origin and size match.

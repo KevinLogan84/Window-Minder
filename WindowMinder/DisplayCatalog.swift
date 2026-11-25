@@ -8,15 +8,13 @@ import CoreGraphics
 struct DisplayCatalog {
     func current() -> DisplayConfiguration {
         var displays: [DisplayDescriptor] = []
-        for screen in NSScreen.screens {
-            guard let displayID = displayID(for: screen) else { continue }
+        for (screen, displayID) in realScreens() {
             let vendor = CGDisplayVendorNumber(displayID)
             let product = CGDisplayModelNumber(displayID)
             let serial = CGDisplaySerialNumber(displayID)
             let uuid = uuidString(for: displayID) ?? ""
             let hasEDID = vendor != 0 && product != 0
             if uuid.isEmpty && !hasEDID { continue }
-            if DisplayIdentity.isPlaceholder(vendorID: vendor, productID: product) { continue }
             let frame = screen.frame
             let name = screen.localizedName.trimmingCharacters(in: .whitespacesAndNewlines)
             displays.append(
@@ -59,7 +57,7 @@ struct DisplayCatalog {
 
     /// Height of the display whose bottom-left is the Cocoa origin.
     func primaryHeight() -> Double {
-        let frames = NSScreen.screens.map { screen in
+        let frames = realScreens().map { screen, _ in
             WMRect(
                 x: Double(screen.frame.origin.x),
                 y: Double(screen.frame.origin.y),
@@ -72,13 +70,25 @@ struct DisplayCatalog {
 
     /// The usable area of each screen (without the menu bar and Dock), in Cocoa coordinates.
     func visibleFrames() -> [WMRect] {
-        NSScreen.screens.map { screen in
+        realScreens().map { screen, _ in
             WMRect(
                 x: Double(screen.visibleFrame.origin.x),
                 y: Double(screen.visibleFrame.origin.y),
                 width: Double(screen.visibleFrame.size.width),
                 height: Double(screen.visibleFrame.size.height)
             )
+        }
+    }
+
+    private func realScreens() -> [(NSScreen, CGDirectDisplayID)] {
+        NSScreen.screens.compactMap { screen in
+            guard let displayID = displayID(for: screen) else { return nil }
+            let vendor = CGDisplayVendorNumber(displayID)
+            let product = CGDisplayModelNumber(displayID)
+            if DisplayIdentity.isPlaceholder(vendorID: vendor, productID: product) {
+                return nil
+            }
+            return (screen, displayID)
         }
     }
 

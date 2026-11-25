@@ -259,7 +259,25 @@ final class AccessibilityClient {
     }
 
     func scanTargets(ignoredBundleIdentifiers: Set<String>) -> [ScanCandidate] {
-        let candidates = NSWorkspace.shared.runningApplications.map { app in
+        WindowScanFilter.appsToScan(
+            runningScanCandidates(),
+            ignoredBundleIdentifiers: ignoredBundleIdentifiers
+        )
+    }
+
+    func restoreTargets(
+        for saved: [WindowRecord],
+        ignoredBundleIdentifiers: Set<String>
+    ) -> [ScanCandidate] {
+        WindowScanFilter.appsToRestore(
+            runningScanCandidates(),
+            saved: saved,
+            ignoredBundleIdentifiers: ignoredBundleIdentifiers
+        )
+    }
+
+    private func runningScanCandidates() -> [ScanCandidate] {
+        NSWorkspace.shared.runningApplications.map { app in
             ScanCandidate(
                 processIdentifier: app.processIdentifier,
                 bundleIdentifier: app.bundleIdentifier ?? "",
@@ -268,7 +286,6 @@ final class AccessibilityClient {
                 activationPolicy: Self.kind(app.activationPolicy)
             )
         }
-        return WindowScanFilter.appsToScan(candidates, ignoredBundleIdentifiers: ignoredBundleIdentifiers)
     }
 
     private static func kind(_ policy: NSApplication.ActivationPolicy) -> AppActivationKind {

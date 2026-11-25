@@ -29,6 +29,15 @@ public func CGDisplayPixelsWide(_ display: CGDirectDisplayID) -> Int { 0 }
 public func CGDisplayPixelsHigh(_ display: CGDirectDisplayID) -> Int { 0 }
 public func CGDisplayCreateUUIDFromDisplayID(_ display: CGDirectDisplayID) -> CFUUID? { nil }
 
+public func CGGetOnlineDisplayList(
+    _ maxDisplays: UInt32,
+    _ onlineDisplays: UnsafeMutablePointer<CGDirectDisplayID>?,
+    _ displayCount: UnsafeMutablePointer<UInt32>?
+) -> CGError {
+    displayCount?.pointee = 0
+    return .success
+}
+
 public struct CGDisplayChangeSummaryFlags: OptionSet, Sendable {
     public let rawValue: UInt32
     public init(rawValue: UInt32) { self.rawValue = rawValue }

@@ -47,6 +47,25 @@ enum AXWindowWork {
         primaryHeight: Double,
         trace: AXTrace
     ) async -> AXCaptureReport {
+        // Accessibility calls block. Keep them off the cooperative thread pool
+        // so a stalled app cannot starve the deadline timer or UI tasks.
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let report = captureOffMain(
+                    targets: targets,
+                    primaryHeight: primaryHeight,
+                    trace: trace
+                )
+                continuation.resume(returning: report)
+            }
+        }
+    }
+
+    private static func captureOffMain(
+        targets: [ScanCandidate],
+        primaryHeight: Double,
+        trace: AXTrace
+    ) -> AXCaptureReport {
         let started = Date()
         let interval = trace == .store
             ? windowSignposter.beginInterval("Store Windows")
@@ -59,8 +78,8 @@ enum AXWindowWork {
             }
         }
         let timeout = Float(WindowScanPlan.timeout(interactive: trace == .store))
-        await setSystemWideTimeout(timeout)
-        let results = await mapApps(targets) { target in
+        setSystemWideTimeoutSync(timeout)
+        let results = mapAppsSync(targets) { target in
             captureApp(target, primaryHeight: primaryHeight, timeout: timeout)
         }
         let windows = results.flatMap(\.windows).sorted { lhs, rhs in
@@ -125,9 +144,15 @@ enum AXWindowWork {
         let interval = windowSignposter.beginInterval("Restore Windows")
         defer { windowSignposter.endInterval("Restore Windows", interval) }
         let timeout = Float(WindowScanPlan.interactiveTimeoutSeconds)
-        setSystemWideTimeoutSync(timeout)
         let ignored = ignoredBundleIdentifiers.union([WindowMinderIdentity.bundleIdentifier])
-        let results = mapAppsSync(targets) { target in
+        let wantedBundles = Set(
+            saved.map(\.bundleIdentifier).filter { !$0.isEmpty && !ignored.contains($0) }
+        )
+        let relevantTargets = targets.filter { wantedBundles.contains($0.bundleIdentifier) }
+        if !relevantTargets.isEmpty {
+            setSystemWideTimeoutSync(timeout)
+        }
+        let results = mapAppsSync(relevantTargets) { target in
             restoreApp(
                 target,
                 saved: saved,
@@ -136,7 +161,7 @@ enum AXWindowWork {
                 timeout: timeout
             )
         }
-        let scanned = Set(targets.map(\.bundleIdentifier))
+        let scanned = Set(relevantTargets.map(\.bundleIdentifier))
         let notRunning = saved.filter { record in
             !record.bundleIdentifier.isEmpty
                 && !ignored.contains(record.bundleIdentifier)
@@ -153,7 +178,7 @@ enum AXWindowWork {
         let matchedSaved = results.flatMap(\.matchedSaved)
         let failedSaved = results.flatMap(\.failedSaved)
         windowLogger.notice(
-            "Restore elapsedMs=\(elapsed, privacy: .public) appsScanned=\(targets.count, privacy: .public) appsTimedOut=\(summary.unresponsiveAppCount, privacy: .public) restored=\(summary.restored, privacy: .public) skipped=\(summary.skipped, privacy: .public) failed=\(summary.failed, privacy: .public) matched=\(matchedSaved.count, privacy: .public)"
+            "Restore elapsedMs=\(elapsed, privacy: .public) appsScanned=\(relevantTargets.count, privacy: .public) appsTimedOut=\(summary.unresponsiveAppCount, privacy: .public) restored=\(summary.restored, privacy: .public) skipped=\(summary.skipped, privacy: .public) failed=\(summary.failed, privacy: .public) matched=\(matchedSaved.count, privacy: .public)"
         )
         return AXRestoreReport(
             summary: summary,
@@ -218,6 +243,18 @@ enum AXWindowWork {
         timeout: Float
     ) -> AppRestore {
         let savedForApp = saved.filter { $0.bundleIdentifier == target.bundleIdentifier }
+        guard !savedForApp.isEmpty else {
+            return AppRestore(
+                bundleIdentifier: target.bundleIdentifier,
+                restored: 0,
+                skipped: 0,
+                failed: 0,
+                timedOut: false,
+                sawWindows: false,
+                matchedSaved: [],
+                failedSaved: []
+            )
+        }
         let app = AXUIElementCreateApplication(target.processIdentifier)
         setTimeout(app, timeout)
         // With AXEnhancedUserInterface on (VoiceOver, some window tools, Chromium and
@@ -355,11 +392,24 @@ enum AXWindowWork {
         exitFullscreen: Bool,
         unminimize: Bool
     ) -> RestoreFramePlan.Landing {
-        if exitFullscreen {
-            _ = setBoolean(false, attribute: "AXFullScreen", on: element)
+        if exitFullscreen, setBoolean(false, attribute: "AXFullScreen", on: element) {
+            waitUntilFalse(
+                attribute: "AXFullScreen",
+                on: element,
+                pollInterval: RestoreFramePlan.fullscreenExitPollInterval,
+                timeout: RestoreFramePlan.fullscreenExitTimeout
+            )
         }
-        if unminimize, !setBoolean(false, attribute: "AXMinimized", on: element) {
-            return .missed
+        if unminimize {
+            guard setBoolean(false, attribute: "AXMinimized", on: element) else {
+                return .missed
+            }
+            waitUntilFalse(
+                attribute: "AXMinimized",
+                on: element,
+                pollInterval: RestoreFramePlan.unminimizePollInterval,
+                timeout: RestoreFramePlan.unminimizeTimeout
+            )
         }
         let axFrame = CoordinateConverter.accessibilityFrame(fromCocoa: frame, primaryHeight: primaryHeight)
         var landing = RestoreFramePlan.Landing.missed
@@ -376,6 +426,22 @@ enum AXWindowWork {
             if landing == .exact { break }
         }
         return landing
+    }
+
+    /// Runs on a worker thread off main while a fullscreen Space switch or
+    /// unminimize animation settles, stopping as soon as the flag clears.
+    private static func waitUntilFalse(
+        attribute: String,
+        on element: AXUIElement,
+        pollInterval: TimeInterval,
+        timeout: TimeInterval
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while boolAttribute(attribute, of: element) == true {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining <= 0 { break }
+            Thread.sleep(forTimeInterval: min(pollInterval, remaining))
+        }
     }
 
     private static func readFrame(of element: AXUIElement) -> WMRect? {
@@ -423,41 +489,9 @@ enum AXWindowWork {
         return results.values.compactMap { $0 }
     }
 
-    private static func mapApps<T: Sendable>(
-        _ targets: [ScanCandidate],
-        _ body: @escaping @Sendable (ScanCandidate) -> T
-    ) async -> [T] {
-        await withTaskGroup(of: T.self) { group in
-            var iterator = targets.makeIterator()
-            var started = 0
-            while started < WindowScanPlan.maxConcurrentApps, let target = iterator.next() {
-                group.addTask { body(target) }
-                started += 1
-            }
-            var collected: [T] = []
-            while let value = await group.next() {
-                collected.append(value)
-                if let target = iterator.next() {
-                    group.addTask { body(target) }
-                }
-            }
-            return collected
-        }
-    }
-
     private static func setSystemWideTimeoutSync(_ timeout: Float) {
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, timeout)
-    }
-
-    private static func setSystemWideTimeout(_ timeout: Float) async {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let system = AXUIElementCreateSystemWide()
-                AXUIElementSetMessagingTimeout(system, timeout)
-                continuation.resume()
-            }
-        }
     }
 
     private static func setTimeout(_ element: AXUIElement, _ timeout: Float) {
