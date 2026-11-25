@@ -53,6 +53,41 @@ final class WindowOperationTests: XCTestCase {
         XCTAssertEqual(apps.map(\.processIdentifier), [10, 13])
     }
 
+    func testAppsToRestoreIncludesHiddenAppsAndFiltersToSavedBundles() {
+        let saved = [
+            record("com.apple.Safari", "Start Page", 0, x: 0),
+            record("com.apple.finder", "Documents", 0, x: 10),
+            record("com.example.ignored", "Skip", 0, x: 20),
+            record(WindowMinderIdentity.bundleIdentifier, "Settings", 0, x: 30),
+        ]
+        let apps = WindowScanFilter.appsToRestore(
+            [
+                candidate("com.apple.Safari", pid: 10, hidden: true),
+                candidate("com.apple.finder", pid: 11),
+                candidate("com.apple.finder", pid: 12),
+                candidate("com.apple.Terminal", pid: 13), // running, not in saved
+                candidate("com.example.ignored", pid: 14),
+                candidate(WindowMinderIdentity.bundleIdentifier, pid: 15),
+                candidate("com.apple.Mail", pid: 16, terminated: true),
+                candidate("com.apple.Safari", pid: 17, policy: .accessory),
+            ],
+            saved: saved,
+            ignoredBundleIdentifiers: ["com.example.ignored"]
+        )
+        XCTAssertEqual(apps.map(\.bundleIdentifier), ["com.apple.Safari", "com.apple.finder"])
+        XCTAssertEqual(apps.map(\.processIdentifier), [10, 11])
+        XCTAssertTrue(WindowScanFilter.appsToRestore([candidate("com.apple.finder", pid: 1)], saved: [], ignoredBundleIdentifiers: []).isEmpty)
+    }
+
+    func testRestoreTransitionSettleTimingsAreBounded() {
+        XCTAssertGreaterThan(RestoreFramePlan.fullscreenExitPollInterval, 0)
+        XCTAssertLessThanOrEqual(RestoreFramePlan.fullscreenExitPollInterval, RestoreFramePlan.fullscreenExitTimeout)
+        XCTAssertLessThanOrEqual(RestoreFramePlan.fullscreenExitTimeout, 1.5)
+        XCTAssertGreaterThan(RestoreFramePlan.unminimizePollInterval, 0)
+        XCTAssertLessThanOrEqual(RestoreFramePlan.unminimizePollInterval, RestoreFramePlan.unminimizeTimeout)
+        XCTAssertLessThanOrEqual(RestoreFramePlan.unminimizeTimeout, 1.0)
+    }
+
     func testSnapshotBackstopDoesNotRunAgainImmediately() {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         XCTAssertTrue(SnapshotSchedule.shouldCapture(lastCapture: nil, now: now))

@@ -23,3 +23,15 @@ jobs:
 
       - name: Run tests
         run: xcodebuild test -scheme WindowMinder -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+
+  linux-swift-test:
+    name: swift test (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.0-noble
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Run SwiftPM tests and Linux typecheck
+        run: swift test

@@ -19,6 +19,7 @@ public struct OSLogMessage: ExpressibleByStringLiteral, ExpressibleByStringInter
 public struct Logger: Sendable {
     public init(subsystem: String, category: String) {}
     public func info(_ message: OSLogMessage) {}
+    public func notice(_ message: OSLogMessage) {}
     public func error(_ message: OSLogMessage) {}
     public func debug(_ message: OSLogMessage) {}
 }

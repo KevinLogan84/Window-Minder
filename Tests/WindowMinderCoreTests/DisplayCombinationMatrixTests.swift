@@ -456,4 +456,28 @@ final class DisplayCombinationMatrixTests: XCTestCase {
             setup, hasLayout: true, keyChanged: false, now: 201.5, before: setup, beforeHasLayout: true
         )), .restore(key: setup.key, generation: second))
     }
+
+    /// A restore that could not start must also clear the 4-second same-setup
+    /// coalesce so granting Accessibility or settling a screen moments later
+    /// actually restores instead of skipping as already satisfied.
+    func testAbortedRestoreDoesNotSuppressImmediateRetry() {
+        let setup = Self.setups[1]
+        var coalescer = DisplayRestoreCoalescer()
+        guard case .arm(let first) = coalescer.note(.launch, at: 10) else { return XCTFail() }
+        XCTAssertEqual(coalescer.evaluate(first, probe(
+            setup, hasLayout: true, keyChanged: false, now: 11.5, before: setup, beforeHasLayout: true
+        )), .restore(key: setup.key, generation: first))
+        XCTAssertTrue(coalescer.isRestoring)
+
+        XCTAssertEqual(coalescer.restoreAborted(), .idle)
+        XCTAssertFalse(coalescer.isRestoring)
+
+        // 1 second later — still inside the 4-second sameSetupCoalesce window.
+        guard case .arm(let second) = coalescer.note(.launch, at: 12.5) else {
+            return XCTFail("a signal after an aborted restore must arm")
+        }
+        XCTAssertEqual(coalescer.evaluate(second, probe(
+            setup, hasLayout: true, keyChanged: false, now: 14.0, before: setup, beforeHasLayout: true
+        )), .restore(key: setup.key, generation: second))
+    }
 }

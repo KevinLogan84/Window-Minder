@@ -22,8 +22,8 @@ enum LayoutTiming {
 /// Login, wake, screen wake, session unlock, and display reconfiguration share
 /// one debounce in `DisplayRestoreCoalescer`. After a wake, a strict subset of
 /// the pre-wake screens waits for the missing display instead of applying the
-/// smaller layout. A manual Restore does not join that wait: it moves the windows
-/// that are open for the displays connected now, then the wait can continue.
+/// smaller layout. A manual Restore does not join that wait: it preempts the
+/// wait and moves the windows that are open for the displays connected now.
 /// Restore reads the layout from disk for that display key and retries windows
 /// that were not moved. The snapshot taken at launch is the saved layout, not
 /// the positions macOS used before those apps opened. A pointer button that is
@@ -81,6 +81,9 @@ final class LayoutCoordinator {
         var configuration: DisplayConfiguration
         var windows: [WindowRecord]
         var capturedAt: Date
+        /// False when this snapshot was captured too close to a display
+        /// disturbance with no earlier settled snapshot to fall back to.
+        var maySaveBeforeChange: Bool = true
     }
 
     init(
@@ -144,6 +147,9 @@ final class LayoutCoordinator {
         }
         await acquireAX()
         defer { releaseAX() }
+        if Task.isCancelled {
+            return MenuStatusLine.couldNotStore
+        }
         let configuration = displays.current()
         guard !configuration.displays.isEmpty else {
             return "No displays were found."
@@ -154,6 +160,9 @@ final class LayoutCoordinator {
         }
         let targets = accessibility.scanTargets(ignoredBundleIdentifiers: settings().ignoredBundleIdentifiers)
         let report = await AXWindowWork.capture(targets: targets, primaryHeight: height, trace: .store)
+        if Task.isCancelled {
+            return MenuStatusLine.couldNotStore
+        }
         let appCount = Set(report.windows.map(\.bundleIdentifier)).count
         let existingLayout: SavedLayout?
         do {
@@ -239,17 +248,18 @@ final class LayoutCoordinator {
     /// later probe must not turn this Restore into a no-op.
     @discardableResult
     func restoreCurrent(announceWhenIdle: Bool = true, trustConfirmed: Bool = false) async -> String {
-        let resumeAutomaticWait = announceWhenIdle
-            && coalescer.hasPendingAutomaticWait
-            && coalescer.missingDisplayWaitIsOpen(at: monotonicNow())
         if announceWhenIdle {
             preemptAutomaticRestore()
         }
         defer {
             if announceWhenIdle {
                 manualRestoreActive = false
-                if resumeAutomaticWait {
-                    noteDisplaySignal(.wake)
+                // A display or wake signal can arrive while a manual Restore is
+                // running and before `finishDisplaySuppression` runs (for example,
+                // if the Restore returned early or was cancelled while awaiting AX).
+                if displayChangePending {
+                    displayChangePending = false
+                    noteDisplaySignal(.displayChange)
                 }
             }
         }
@@ -300,7 +310,7 @@ final class LayoutCoordinator {
         let heightForPass = passHeight > 0 ? passHeight : height
         if !Task.isCancelled, announceWhenIdle || !keyChanged, heightForPass > 0 {
             report = await AXWindowWork.restore(
-                targets: accessibility.scanTargets(ignoredBundleIdentifiers: ignored),
+                targets: accessibility.restoreTargets(for: placed, ignoredBundleIdentifiers: ignored),
                 saved: placed,
                 ignoredBundleIdentifiers: ignored,
                 primaryHeight: heightForPass
@@ -367,7 +377,7 @@ final class LayoutCoordinator {
                     return
                 }
                 let report = await AXWindowWork.restore(
-                    targets: accessibility.scanTargets(ignoredBundleIdentifiers: ignored),
+                    targets: accessibility.restoreTargets(for: pending, ignoredBundleIdentifiers: ignored),
                     saved: pending,
                     ignoredBundleIdentifiers: ignored,
                     primaryHeight: height
@@ -467,12 +477,18 @@ final class LayoutCoordinator {
         }
         guard displaysDisturbed else { return }
         // A snapshot taken in the last moments may hold windows that macOS has squeezed
-        // onto the stand-in screen, or is still putting back. Use the one before it.
-        if let snapshot, !SnapshotSchedule.isSettled(capturedAt: snapshot.capturedAt, now: Date()),
-           let priorSnapshot, priorSnapshot.configuration.key == snapshot.configuration.key {
-            layoutLogger.notice("Dropped a snapshot taken as the displays changed")
-            self.snapshot = priorSnapshot
-            self.priorSnapshot = nil
+        // onto the stand-in screen, or is still putting back. Use the one before it,
+        // or mark it ineligible to overwrite the saved file if no earlier snapshot exists.
+        if let snapshot, !SnapshotSchedule.isSettled(capturedAt: snapshot.capturedAt, now: Date()) {
+            if let priorSnapshot, priorSnapshot.configuration.key == snapshot.configuration.key {
+                layoutLogger.notice("Dropped a snapshot taken as the displays changed")
+                self.snapshot = priorSnapshot
+                self.priorSnapshot = nil
+            } else if snapshot.maySaveBeforeChange {
+                layoutLogger.notice("Marked an unsettled snapshot ineligible to save before display change")
+                self.snapshot?.maySaveBeforeChange = false
+                self.priorSnapshot = nil
+            }
         }
     }
 
@@ -489,9 +505,9 @@ final class LayoutCoordinator {
     }
 
     /// Stop the quiet timer and any automatic restore that is holding Accessibility.
-    /// A manual Restore then moves the current setup immediately. The subset wait
-    /// is not deleted: `restoreCurrent` arms it again after the move when it is
-    /// still inside the wake window.
+    /// A manual Restore then moves the current setup immediately. If a missing
+    /// display reconnects afterward, its display-change event still restores the
+    /// fuller layout without re-arming a subset wait that would cancel late retries.
     private func preemptAutomaticRestore() {
         manualRestoreActive = true
         automaticEpoch += 1
@@ -501,6 +517,7 @@ final class LayoutCoordinator {
         dragWatch = nil
         displayTask?.cancel()
         displayGeneration += 1
+        clearWakeBaseline()
         coalescer.beginManualRestore()
     }
 
@@ -736,7 +753,7 @@ final class LayoutCoordinator {
                 // yet, no screens ready, nothing saved). Release it so later signals count.
                 layoutLogger.notice("Restore did not start: \(message, privacy: .public)")
                 if self.displays.isDisturbed() { self.displaysDisturbed = true }
-                switch self.coalescer.restoreFinished() {
+                switch self.coalescer.restoreAborted() {
                 case .arm(let quietGeneration):
                     self.beginQuietWait(generation: quietGeneration)
                     return
@@ -788,6 +805,7 @@ final class LayoutCoordinator {
     ) -> [String] {
         guard settings().saveBeforeDisplayChange,
               let previous,
+              previous.maySaveBeforeChange,
               !previous.configuration.displays.isEmpty,
               (previous.configuration.key == current.key) == sameSetup
         else {

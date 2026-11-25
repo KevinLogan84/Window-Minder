@@ -17,7 +17,6 @@ final class AppModel {
     private var didStart = false
     private var externalFrontmostBundleID: String?
     private var frontmostObserver: NSObjectProtocol?
-    private var activationObserver: NSObjectProtocol?
     private var trustPollTimer: Timer?
     private var notificationRecheckGeneration = 0
     private var lastActivationCheckUptime: TimeInterval = -1
@@ -25,6 +24,7 @@ final class AppModel {
     private static weak var trustRefreshTarget: AppModel?
     var onAccessibilityTrustChange: (@MainActor () -> Void)?
     private var windowOperation: Task<Void, Never>?
+    private var windowOperationDeadline: Task<Void, Never>?
     private var operationSettled = false
     private var menuBarGeneration = 0
     /// Status text that belongs to a store or restore that has not finished.
@@ -244,9 +244,14 @@ final class AppModel {
             self.finishIfCurrent(token, message)
         }
         windowOperation = task
-        Task { @MainActor in
+        windowOperationDeadline?.cancel()
+        windowOperationDeadline = Task { @MainActor in
             let nanoseconds = UInt64(WindowOperationDeadline.limit * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanoseconds)
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
+            }
             guard !self.operationSettled, token == self.menuBarGeneration else { return }
             task.cancel()
             self.finishIfCurrent(token, fallback)
@@ -370,6 +375,8 @@ final class AppModel {
 
     private func finishWindowOperation(_ message: String) {
         windowOperation = nil
+        windowOperationDeadline?.cancel()
+        windowOperationDeadline = nil
         inProgressStatus = nil
         if !message.isEmpty {
             presentStatus(message)
@@ -463,16 +470,6 @@ final class AppModel {
             self?.recheckTrustAfterAccessibilityNotification()
         }
         accessibilityChanges.start()
-
-        activationObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.didBecomeActiveNotification,
-            object: nil,
-            queue: .main
-        ) { _ in
-            MainActor.assumeIsolated {
-                AppModel.trustRefreshTarget?.refreshAccessibilityTrust(source: .activation)
-            }
-        }
     }
 
     /// The distributed notification can arrive on any thread and before the grant
