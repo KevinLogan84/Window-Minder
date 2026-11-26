@@ -335,7 +335,7 @@ final class LayoutCoordinator {
         )
         // A display change during the apply already armed a new wait; that wait owns what happens next.
         if !pending.isEmpty, displayGeneration == applyGeneration {
-            startLateRetries(pending, configurationKey: configuration.key)
+            startLateRetries(pending, settled: report.matchedSaved, configurationKey: configuration.key)
         }
         let summary = RestoreSummary(
             restored: report.summary.restored,
@@ -353,11 +353,12 @@ final class LayoutCoordinator {
     /// second for `LateWindowRetry.duration`. This runs after Restore has reported, so it
     /// does not hold up the menu, Store, or the next display event. The Accessibility lock
     /// is taken only for each pass. A display event or another Restore cancels it.
-    private func startLateRetries(_ windows: [WindowRecord], configurationKey: String) {
+    private func startLateRetries(_ windows: [WindowRecord], settled initialSettled: [WindowRecord], configurationKey: String) {
         lateRetryTask?.cancel()
         let started = Date()
         lateRetryTask = Task { @MainActor in
             var pending = windows
+            var settled = initialSettled
             var restored = 0
             while !pending.isEmpty {
                 let elapsed = Date().timeIntervalSince(started)
@@ -379,11 +380,13 @@ final class LayoutCoordinator {
                 let report = await AXWindowWork.restore(
                     targets: accessibility.restoreTargets(for: pending, ignoredBundleIdentifiers: ignored),
                     saved: pending,
+                    alreadySettled: settled,
                     ignoredBundleIdentifiers: ignored,
                     primaryHeight: height
                 )
                 releaseAX()
                 restored += report.summary.restored
+                settled.append(contentsOf: report.matchedSaved)
                 pending = LateWindowRetry.windowsToRetry(
                     saved: pending,
                     matched: report.matchedSaved,

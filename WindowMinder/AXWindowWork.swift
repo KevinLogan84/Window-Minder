@@ -115,6 +115,7 @@ enum AXWindowWork {
     static func restore(
         targets: [ScanCandidate],
         saved: [WindowRecord],
+        alreadySettled: [WindowRecord] = [],
         ignoredBundleIdentifiers: Set<String>,
         primaryHeight: Double
     ) async -> AXRestoreReport {
@@ -126,6 +127,7 @@ enum AXWindowWork {
                 let report = restoreOffMain(
                     targets: targets,
                     saved: saved,
+                    alreadySettled: alreadySettled,
                     ignoredBundleIdentifiers: ignoredBundleIdentifiers,
                     primaryHeight: primaryHeight
                 )
@@ -137,6 +139,7 @@ enum AXWindowWork {
     private static func restoreOffMain(
         targets: [ScanCandidate],
         saved: [WindowRecord],
+        alreadySettled: [WindowRecord],
         ignoredBundleIdentifiers: Set<String>,
         primaryHeight: Double
     ) -> AXRestoreReport {
@@ -156,6 +159,7 @@ enum AXWindowWork {
             restoreApp(
                 target,
                 saved: saved,
+                alreadySettled: alreadySettled,
                 ignoredBundleIdentifiers: ignored,
                 primaryHeight: primaryHeight,
                 timeout: timeout
@@ -238,6 +242,7 @@ enum AXWindowWork {
     private static func restoreApp(
         _ target: ScanCandidate,
         saved: [WindowRecord],
+        alreadySettled: [WindowRecord],
         ignoredBundleIdentifiers: Set<String>,
         primaryHeight: Double,
         timeout: Float
@@ -255,20 +260,9 @@ enum AXWindowWork {
                 failedSaved: []
             )
         }
+        let settledForApp = alreadySettled.filter { $0.bundleIdentifier == target.bundleIdentifier }
         let app = AXUIElementCreateApplication(target.processIdentifier)
         setTimeout(app, timeout)
-        // With AXEnhancedUserInterface on (VoiceOver, some window tools, Chromium and
-        // Electron apps), the app animates moves and answers with stale frames, so the
-        // window lands short of its target. Turn it off for the move and put it back.
-        let enhancedUI = boolAttribute("AXEnhancedUserInterface", of: app)
-        if enhancedUI == true {
-            _ = setBoolean(false, attribute: "AXEnhancedUserInterface", on: app)
-        }
-        defer {
-            if enhancedUI == true {
-                _ = setBoolean(true, attribute: "AXEnhancedUserInterface", on: app)
-            }
-        }
         switch copyWindows(of: app) {
         case .timedOut:
             windowLogger.error(
@@ -308,11 +302,33 @@ enum AXWindowWork {
                 )
                 live.append((window: window, element: elements[offset], fullscreen: item.attributes.fullscreen))
             }
-            let matches = WindowMatcher.match(
-                saved: savedForApp,
-                live: live.map(\.window),
-                ignoredBundleIdentifiers: ignoredBundleIdentifiers
-            )
+            let matches: [WindowMatch]
+            if settledForApp.isEmpty {
+                matches = WindowMatcher.match(
+                    saved: savedForApp,
+                    live: live.map(\.window),
+                    ignoredBundleIdentifiers: ignoredBundleIdentifiers
+                )
+            } else {
+                matches = LateWindowRetry.matchPending(
+                    pending: savedForApp,
+                    settled: settledForApp,
+                    live: live.map(\.window),
+                    ignoredBundleIdentifiers: ignoredBundleIdentifiers
+                )
+            }
+            // With AXEnhancedUserInterface on (VoiceOver, some window tools, Chromium and
+            // Electron apps), the app animates moves and answers with stale frames, so the
+            // window lands short of its target. Turn it off only while moving windows.
+            let enhancedUI = matches.isEmpty ? nil : boolAttribute("AXEnhancedUserInterface", of: app)
+            if enhancedUI == true {
+                _ = setBoolean(false, attribute: "AXEnhancedUserInterface", on: app)
+            }
+            defer {
+                if enhancedUI == true {
+                    _ = setBoolean(true, attribute: "AXEnhancedUserInterface", on: app)
+                }
+            }
             var pool = live
             var restored = 0
             var failed = 0

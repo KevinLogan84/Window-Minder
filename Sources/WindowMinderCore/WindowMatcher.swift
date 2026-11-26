@@ -171,6 +171,58 @@ public enum LateWindowRetry {
         return retry
     }
 
+    /// Matches only `pending` saved windows while letting `settled` saved windows
+    /// keep claiming the live windows they already restored. If an app has no more
+    /// live windows than were already settled, nothing is matched for that app, so
+    /// an already-restored window cannot be overwritten with a different saved slot
+    /// even if its title changed.
+    public static func matchPending(
+        pending: [WindowRecord],
+        settled: [WindowRecord],
+        live: [LiveWindow],
+        ignoredBundleIdentifiers: Set<String> = []
+    ) -> [WindowMatch] {
+        let ignored = ignoredBundleIdentifiers.union([WindowMinderIdentity.bundleIdentifier])
+        let pendingRecords = pending.filter {
+            !$0.bundleIdentifier.isEmpty && !ignored.contains($0.bundleIdentifier)
+        }
+        guard !pendingRecords.isEmpty else { return [] }
+        let pendingBundles = Set(pendingRecords.map(\.bundleIdentifier))
+        let settledRecords = settled.filter { pendingBundles.contains($0.bundleIdentifier) }
+        let eligibleLive = live.filter { window in
+            let standard = (window.role == nil && window.subrole == nil)
+                || WindowCaptureRules.isStandardWindow(role: window.role, subrole: window.subrole)
+            return standard && pendingBundles.contains(window.record.bundleIdentifier)
+        }
+        var activeBundles = Set<String>()
+        for bundle in pendingBundles {
+            let liveCount = eligibleLive.filter { $0.record.bundleIdentifier == bundle }.count
+            let settledCount = settledRecords.filter { $0.bundleIdentifier == bundle }.count
+            if liveCount > settledCount {
+                activeBundles.insert(bundle)
+            }
+        }
+        guard !activeBundles.isEmpty else { return [] }
+        let activePending = pendingRecords.filter { activeBundles.contains($0.bundleIdentifier) }
+        let activeSettled = settledRecords.filter { activeBundles.contains($0.bundleIdentifier) }
+        let activeLive = eligibleLive.filter { activeBundles.contains($0.record.bundleIdentifier) }
+        let allMatches = WindowMatcher.match(
+            saved: activeSettled + activePending,
+            live: activeLive,
+            ignoredBundleIdentifiers: ignored
+        )
+        var remainingSettled = activeSettled
+        var result: [WindowMatch] = []
+        for match in allMatches {
+            if let index = remainingSettled.firstIndex(of: match.saved) {
+                remainingSettled.remove(at: index)
+                continue
+            }
+            result.append(match)
+        }
+        return result
+    }
+
     /// Saved apps that do not have a live window yet. Window Minder waits for these
     /// bundle ids to appear. It does not launch the apps, and a missing app is not a failed restore.
     public static func bundlesAwaitingWindows(

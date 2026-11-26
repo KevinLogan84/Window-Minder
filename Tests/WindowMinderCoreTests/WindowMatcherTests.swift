@@ -290,6 +290,47 @@ final class WindowMatcherTests: XCTestCase {
         XCTAssertEqual(matches[0].live.windowTitle, "A")
     }
 
+    func testLateRetryDoesNotOverwriteAlreadyRestoredWindow() {
+        let popup = window("com.example.WebApp", "Post / X", 0, x: 821)
+        let main = window("com.example.WebApp", "X", 1, x: 792)
+        // First pass matched the single live window ("X") to `main` (x: 792) and left `popup` (idx 0, x: 821) pending.
+        let stillOneWindow = [LiveWindow(record: window("com.example.WebApp", "X", 0, x: 792))]
+        XCTAssertTrue(
+            LateWindowRetry.matchPending(pending: [popup], settled: [main], live: stillOneWindow).isEmpty
+        )
+        // Even if the live window's title changes, no new window opened, so it must not be moved to `popup`.
+        let renamedWindow = [LiveWindow(record: window("com.example.WebApp", "Home / X", 0, x: 792))]
+        XCTAssertTrue(
+            LateWindowRetry.matchPending(pending: [popup], settled: [main], live: renamedWindow).isEmpty
+        )
+    }
+
+    func testLateRetryRestoresSecondWindowOnceItOpensAndRetriesFailedMove() {
+        let popup = window("com.example.WebApp", "Post / X", 0, x: 821)
+        let main = window("com.example.WebApp", "X", 1, x: 792)
+        // When a second window opens, `main` keeps claiming its window and only `popup` is matched.
+        let twoWindows = [
+            LiveWindow(record: window("com.example.WebApp", "X", 0, x: 792)),
+            LiveWindow(record: window("com.example.WebApp", "Post / X", 1, x: 500)),
+        ]
+        let openedMatches = LateWindowRetry.matchPending(pending: [popup], settled: [main], live: twoWindows)
+        XCTAssertEqual(openedMatches.count, 1)
+        XCTAssertEqual(openedMatches[0].saved, popup)
+        XCTAssertEqual(openedMatches[0].live.windowIndex, 1)
+
+        // When one of two open windows failed to move on pass 1 (not in settled), late retry still retries it.
+        let first = window("com.apple.Safari", "Docs", 0, x: 100)
+        let second = window("com.apple.Safari", "Mail", 1, x: 900)
+        let liveSafari = [
+            LiveWindow(record: window("com.apple.Safari", "Docs", 0, x: 100)),
+            LiveWindow(record: window("com.apple.Safari", "Mail", 1, x: 400)),
+        ]
+        let retryMatches = LateWindowRetry.matchPending(pending: [second], settled: [first], live: liveSafari)
+        XCTAssertEqual(retryMatches.count, 1)
+        XCTAssertEqual(retryMatches[0].saved, second)
+        XCTAssertEqual(retryMatches[0].live.windowIndex, 1)
+    }
+
     private func window(_ bundle: String, _ title: String, _ index: Int, x: Double = 0) -> WindowRecord {
         WindowRecord(
             bundleIdentifier: bundle,

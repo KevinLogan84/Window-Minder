@@ -394,10 +394,16 @@ public struct LayoutWindowMergeResult: Equatable, Sendable {
 
 public enum LayoutWindowMerge {
     /// Open windows replace the saved records they match. Saved windows that are
-    /// not open stay, so a smaller capture does not wipe a fuller layout.
+    /// not open stay, so a smaller capture does not wipe a fuller layout. A kept
+    /// window whose index collides with a live window of the same app is moved to
+    /// the next unused index so the live window keeps `windowIndex` ownership.
     public static func keepingClosed(saved: [WindowRecord], captured: [WindowRecord]) -> LayoutWindowMergeResult {
         let matches = WindowMatcher.match(saved: saved, live: captured)
         var matched = matches.map(\.saved)
+        var usedIndexesByBundle: [String: Set<Int>] = [:]
+        for record in captured where !record.bundleIdentifier.isEmpty {
+            usedIndexesByBundle[record.bundleIdentifier, default: []].insert(record.windowIndex)
+        }
         var kept: [WindowRecord] = []
         for record in saved {
             if record.bundleIdentifier.isEmpty || record.bundleIdentifier == WindowMinderIdentity.bundleIdentifier {
@@ -407,7 +413,18 @@ public enum LayoutWindowMerge {
                 matched.remove(at: index)
                 continue
             }
-            kept.append(record)
+            var adjusted = record
+            var used = usedIndexesByBundle[record.bundleIdentifier, default: []]
+            if used.contains(adjusted.windowIndex) {
+                var nextIndex = (used.max() ?? -1) + 1
+                while used.contains(nextIndex) {
+                    nextIndex += 1
+                }
+                adjusted.windowIndex = nextIndex
+            }
+            used.insert(adjusted.windowIndex)
+            usedIndexesByBundle[record.bundleIdentifier] = used
+            kept.append(adjusted)
         }
         return LayoutWindowMergeResult(windows: captured + kept, keptWindowCount: kept.count)
     }

@@ -286,6 +286,30 @@ final class WindowOperationTests: XCTestCase {
         XCTAssertEqual(summary.message, "Stored 1 window from 1 app. Kept 2 windows that were not open")
     }
 
+    func testKeepingClosedReindexesCollidingWindowIndex() {
+        let saved = [
+            record("com.example.WebApp", "Post / X", 0, x: 821),
+            record("com.example.WebApp", "X", 1, x: 792),
+            record("com.apple.Safari", "Start Page", 0, x: 1428),
+        ]
+        let captured = [
+            record("com.example.WebApp", "X", 0, x: 792),
+        ]
+        let prepared = LayoutOverwrite.prepareStore(existing: saved, captured: captured)
+        XCTAssertTrue(prepared.shouldSave)
+        let webAppWindows = prepared.windows.filter { $0.bundleIdentifier == "com.example.WebApp" }
+        XCTAssertEqual(webAppWindows.first { $0.windowTitle == "X" }?.windowIndex, 0)
+        XCTAssertEqual(webAppWindows.first { $0.windowTitle == "Post / X" }?.windowIndex, 1)
+
+        // After the live window's title changes, index 0 restores to the live window's position (792), not the closed popup (821).
+        let matches = WindowMatcher.match(
+            saved: prepared.windows,
+            live: [record("com.example.WebApp", "Home / X", 0, x: 400)]
+        )
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(matches[0].saved.frame.x, 792)
+    }
+
     func testWindowOperationDeadlineOutlastsTheRetryAndClearsAStuckRestore() {
         XCTAssertGreaterThan(WindowOperationDeadline.limit, LateWindowRetry.duration)
         XCTAssertLessThan(WindowOperationDeadline.limit, DisplayRestoreTiming.wakeLayoutWindow)
